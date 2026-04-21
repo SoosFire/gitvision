@@ -1,0 +1,14 @@
+# Enforce LF on all text files — prevents CRLF drift between Mac and Windows
+* text=auto eol=lf
+
+# Explicit binaries
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.db binary
+*.sqlite binary

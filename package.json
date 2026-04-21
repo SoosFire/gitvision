@@ -1,5 +1,5 @@
 {
-  "name": "gitvision-tmp",
+  "name": "gitvision",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,12 +9,19 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@xyflow/react": "^12.10.2",
+    "d3": "^7.9.0",
+    "html-to-image": "^1.11.13",
+    "nanoid": "^5.1.9",
     "next": "16.2.4",
+    "octokit": "^5.0.5",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/d3": "^7.4.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

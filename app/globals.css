@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
 
 :root {
   --background: #ffffff;
@@ -22,5 +23,25 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Subtle dotted bg texture for the canvas feel */
+.canvas-dots {
+  background-image: radial-gradient(
+    circle,
+    rgba(0, 0, 0, 0.06) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .canvas-dots {
+    background-image: radial-gradient(
+      circle,
+      rgba(255, 255, 255, 0.06) 1px,
+      transparent 1px
+    );
+  }
 }
