@@ -135,7 +135,8 @@ export async function generateRepoSummary(
   const response = await client.messages.create({
     model: SUMMARY_MODEL,
     max_tokens: MAX_TOKENS,
-    thinking: { type: "adaptive" },
+    // Thinking disabled — was adaptive (Opus-only). Summary is a prose task,
+    // not deep reasoning, so we don't need extended thinking on Sonnet.
     system: SYSTEM_PROMPT,
     messages: [
       {
