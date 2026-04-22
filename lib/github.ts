@@ -10,6 +10,7 @@ import type {
   AnalysisSnapshot,
   FileHotspot,
   CoChangeEdge,
+  CommitIndexEntry,
   PullRequestSummary,
 } from "./types";
 import { buildFileGraph } from "./graph";
@@ -348,7 +349,7 @@ export async function analyzeRepo(
   >;
   let recentCommits: CommitSummary[];
   let historySource: AnalysisSnapshot["historySource"];
-  let commitIndex: Record<string, { d: string; a: string | null }> | undefined;
+  let commitIndex: Record<string, CommitIndexEntry> | undefined;
 
   if (usingGitLog) {
     perCommitFiles = gitLogCommitsToPerCommitFiles(history.commits);

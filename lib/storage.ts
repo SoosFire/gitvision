@@ -1,13 +1,16 @@
 // File-based session storage.
-// Sessions live in `.gitvision/sessions/<id>.json` relative to project root.
-// Simple, portable, inspectable. Good enough for MVP and single-user usage.
+// Local dev: sessions live in `.gitvision/sessions/<id>.json` relative to project root.
+// Production: set GITVISION_DATA_DIR to a persistent volume path (e.g. `/data` on Railway)
+// so sessions survive redeploys and container restarts.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import type { Session, SessionSummary, AnalysisSnapshot } from "./types";
 
-const STORE_DIR = path.join(process.cwd(), ".gitvision", "sessions");
+const DATA_DIR =
+  process.env.GITVISION_DATA_DIR ?? path.join(process.cwd(), ".gitvision");
+const STORE_DIR = path.join(DATA_DIR, "sessions");
 
 async function ensureDir() {
   await fs.mkdir(STORE_DIR, { recursive: true });
