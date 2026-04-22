@@ -3,21 +3,33 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import * as htmlToImage from "html-to-image";
+import type { AnalysisSnapshot } from "@/lib/types";
+import { ShareCardModal } from "./ShareCardModal";
+import { ContributorWrappedModal } from "./ContributorWrappedModal";
 
 interface Props {
   sessionId: string;
   sessionName: string;
   repoUrl: string;
   targetId: string; // DOM id of the element to screenshot
+  snapshot: AnalysisSnapshot;
 }
 
-export function SessionToolbar({ sessionId, sessionName, repoUrl, targetId }: Props) {
+export function SessionToolbar({
+  sessionId,
+  sessionName,
+  repoUrl,
+  targetId,
+  snapshot,
+}: Props) {
   const router = useRouter();
   const [name, setName] = useState(sessionName);
   const [editing, setEditing] = useState(false);
   const [refreshing, startRefresh] = useTransition();
   const [deleting, startDelete] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [wrappedOpen, setWrappedOpen] = useState(false);
 
   async function rename() {
     const trimmed = name.trim();
@@ -116,6 +128,18 @@ export function SessionToolbar({ sessionId, sessionName, repoUrl, targetId }: Pr
       </div>
       <div className="flex items-center gap-2">
         <button
+          onClick={() => setWrappedOpen(true)}
+          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+        >
+          🎁 Wrapped
+        </button>
+        <button
+          onClick={() => setShareOpen(true)}
+          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+        >
+          ✨ Share card
+        </button>
+        <button
           onClick={screenshot}
           className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
         >
@@ -139,6 +163,17 @@ export function SessionToolbar({ sessionId, sessionName, repoUrl, targetId }: Pr
       {message && (
         <div className="w-full text-sm text-red-600 dark:text-red-400">{message}</div>
       )}
+      <ShareCardModal
+        snapshot={snapshot}
+        sessionName={sessionName}
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+      />
+      <ContributorWrappedModal
+        snapshot={snapshot}
+        open={wrappedOpen}
+        onClose={() => setWrappedOpen(false)}
+      />
     </div>
   );
 }

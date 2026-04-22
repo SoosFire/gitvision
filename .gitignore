@@ -44,5 +44,8 @@ next-env.d.ts
 # GitVision user data (sessions are per-machine, regeneratable)
 /.gitvision/
 
+# Scratch space for local test uploads — never committed
+/demo-project/
+
 # Claude Code local prefs (keep launch.json tracked for team DX)
 .claude/settings.local.json

@@ -4,13 +4,14 @@
 // Optimized for readability and smoothness: no blur filters, memoized nodes,
 // deferred slider updates, edges on-demand.
 
-import { memo, useDeferredValue, useMemo, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
+  useReactFlow,
   type Node,
   type Edge,
   type NodeProps,
@@ -113,6 +114,69 @@ function ageDays(iso: string): number {
   return (Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24);
 }
 
+// Metadata / noise files that tend to dominate hotspots on monorepos and
+// release-heavy projects without telling you much about the *code*.
+// Matched case-insensitively against the basename unless marked exact.
+const METADATA_BASENAMES = new Set<string>([
+  "readme.md",
+  "readme",
+  "changelog.md",
+  "changelog",
+  "license",
+  "license.md",
+  "license.txt",
+  "contributing.md",
+  "code_of_conduct.md",
+  "security.md",
+  "authors",
+  "notice",
+  "package.json",
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lock",
+  "bun.lockb",
+  "cargo.toml",
+  "cargo.lock",
+  "go.mod",
+  "go.sum",
+  "gemfile",
+  "gemfile.lock",
+  "pipfile",
+  "pipfile.lock",
+  "requirements.txt",
+  "poetry.lock",
+  "pyproject.toml",
+  ".gitignore",
+  ".gitattributes",
+  ".editorconfig",
+  ".nvmrc",
+  ".node-version",
+  ".python-version",
+  ".ruby-version",
+  "dockerfile",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+]);
+const METADATA_PATTERNS: RegExp[] = [
+  /\.prettierrc($|\.)/i,
+  /\.eslintrc($|\.)/i,
+  /\.stylelintrc($|\.)/i,
+  /tsconfig(\.[^.]+)?\.json$/i,
+  /jsconfig\.json$/i,
+  /\.config\.(js|cjs|mjs|ts)$/i, // jest/webpack/vite/next/rollup/etc.
+  /^\.github\//i, // workflows, issue templates, etc.
+];
+
+function isMetadataFile(path: string): boolean {
+  const base = (path.split("/").pop() ?? "").toLowerCase();
+  if (METADATA_BASENAMES.has(base)) return true;
+  for (const re of METADATA_PATTERNS) {
+    if (re.test(path)) return true;
+  }
+  return false;
+}
+
 // ------------------- Custom file node (card) -------------------
 
 interface FileNodeData extends Record<string, unknown> {
@@ -120,12 +184,14 @@ interface FileNodeData extends Record<string, unknown> {
   isHot: boolean;
   isSelected: boolean;
   isDimmed: boolean;
+  authorTint?: { bg: string; ring: string; text: string; authorLogin: string };
   onSelect: (path: string) => void;
 }
 
 const FileNode = memo(function FileNode({ data }: NodeProps) {
-  const { hotspot, isHot, isSelected, isDimmed, onSelect } = data as FileNodeData;
-  const c = colorFor(hotspot.path);
+  const { hotspot, isHot, isSelected, isDimmed, authorTint, onSelect } =
+    data as FileNodeData;
+  const c = authorTint ?? colorFor(hotspot.path);
   const name = fileDisplayName(hotspot.path);
   const recent = ageDays(hotspot.lastModified) < 7;
 
@@ -258,7 +324,10 @@ const FolderNode = memo(function FolderNode({ data }: NodeProps) {
   );
 });
 
-const nodeTypes = { file: FileNode, folder: FolderNode };
+// Frozen at module scope so the reference is stable across renders AND HMR
+// updates — React Flow warns otherwise. `Object.freeze` is a belt-and-braces
+// hint that this object should never be mutated.
+const NODE_TYPES = Object.freeze({ file: FileNode, folder: FolderNode });
 
 // ------------------- Layout -------------------
 
@@ -358,16 +427,42 @@ interface Props {
   snapshot: AnalysisSnapshot;
 }
 
+// Author color palette — up to 10 distinct hues, rest fall back to neutral gray.
+// Chosen for reasonable contrast on dark bg + rough colorblind-friendliness.
+const AUTHOR_PALETTE: Array<{ bg: string; ring: string; text: string }> = [
+  { bg: "#1e3a5f", ring: "#3b82f6", text: "#bfdbfe" },
+  { bg: "#134e4a", ring: "#14b8a6", text: "#99f6e4" },
+  { bg: "#5a2e1a", ring: "#f97316", text: "#fed7aa" },
+  { bg: "#3b1a5a", ring: "#a855f7", text: "#e9d5ff" },
+  { bg: "#5a1a1a", ring: "#ef4444", text: "#fecaca" },
+  { bg: "#1a5a3b", ring: "#22c55e", text: "#bbf7d0" },
+  { bg: "#5a4a1a", ring: "#eab308", text: "#fef08a" },
+  { bg: "#4a1a5a", ring: "#d946ef", text: "#f5d0fe" },
+  { bg: "#164e63", ring: "#06b6d4", text: "#a5f3fc" },
+  { bg: "#5a1a3e", ring: "#ec4899", text: "#fbcfe8" },
+];
+const AUTHOR_OTHER = { bg: "#262628", ring: "#52525b", text: "#d4d4d8" };
+
 function ConstellationInner({ snapshot }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [minChurnInput, setMinChurnInput] = useState(1);
   const minChurn = useDeferredValue(minChurnInput); // smooth slider
   const [showEdges, setShowEdges] = useState(false);
   const [showMinimap, setShowMinimap] = useState(false);
+  const [hideMetadata, setHideMetadata] = useState(false);
+  const [colorBy, setColorBy] = useState<"type" | "author">("type");
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDeferredValue(searchInput.trim().toLowerCase());
+  const [timeIndex, setTimeIndex] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [granularity, setGranularity] = useState<"week" | "day" | "commit">(
+    "week"
+  );
+  const { fitView } = useReactFlow();
 
   // Defensive: old snapshots may lack these fields
   const allCoChange = snapshot.coChange ?? [];
-  const allHotspots = useMemo(
+  const rawHotspots = useMemo(
     () =>
       (snapshot.hotspots ?? []).map((h) => ({
         ...h,
@@ -377,15 +472,173 @@ function ConstellationInner({ snapshot }: Props) {
     [snapshot.hotspots]
   );
 
+  // sha → date + authorLogin. Prefer `commitIndex` (full history) when present,
+  // fall back to the trimmed `recentCommits` list otherwise.
+  const shaMeta = useMemo(() => {
+    const m = new Map<string, { date: string; authorLogin: string | null }>();
+    if (snapshot.commitIndex) {
+      for (const [sha, meta] of Object.entries(snapshot.commitIndex)) {
+        m.set(sha, { date: meta.d, authorLogin: meta.a });
+      }
+    }
+    // recentCommits still overrides — in case commitIndex was truncated
+    for (const c of snapshot.recentCommits ?? []) {
+      m.set(c.sha, { date: c.date, authorLogin: c.authorLogin });
+    }
+    return m;
+  }, [snapshot.commitIndex, snapshot.recentCommits]);
+
+  // Only commits that were deep-analyzed (i.e. have file data) drive hotspots.
+  // When commitIndex is present we use it (full history); otherwise the scrubber
+  // window collapses to whatever recentCommits covers.
+  const hotspotCommits = useMemo(() => {
+    const shas = new Set<string>();
+    for (const h of rawHotspots) for (const sha of h.commits) shas.add(sha);
+    const out: Array<{ sha: string; t: number }> = [];
+    for (const sha of shas) {
+      const meta = shaMeta.get(sha);
+      if (!meta?.date) continue;
+      const t = new Date(meta.date).getTime();
+      if (Number.isNaN(t)) continue;
+      out.push({ sha, t });
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }, [rawHotspots, shaMeta]);
+
+  // Time buckets: each step = { label, cutoff } at the chosen granularity.
+  // All three granularities span only the window with file data.
+  const timeBuckets = useMemo<
+    Array<{ label: string; cutoff: number }>
+  >(() => {
+    if (hotspotCommits.length === 0) return [];
+
+    if (granularity === "commit") {
+      return hotspotCommits.map((c) => ({
+        label: new Date(c.t).toISOString().slice(0, 16).replace("T", " "),
+        cutoff: c.t + 1,
+      }));
+    }
+
+    const DAY = 24 * 60 * 60 * 1000;
+    if (granularity === "day") {
+      const first = Math.floor(hotspotCommits[0].t / DAY) * DAY;
+      const last =
+        Math.floor(hotspotCommits[hotspotCommits.length - 1].t / DAY) * DAY;
+      const out: Array<{ label: string; cutoff: number }> = [];
+      for (let t = first; t <= last; t += DAY) {
+        out.push({
+          label: new Date(t).toISOString().slice(0, 10),
+          cutoff: t + DAY,
+        });
+      }
+      return out;
+    }
+
+    // Week: derive Monday-keyed buckets from hotspotCommits only
+    const weekMap = new Map<string, number>();
+    for (const c of hotspotCommits) {
+      const d = new Date(c.t);
+      const dow = d.getUTCDay();
+      const shift = dow === 0 ? -6 : 1 - dow;
+      const monday = Date.UTC(
+        d.getUTCFullYear(),
+        d.getUTCMonth(),
+        d.getUTCDate() + shift
+      );
+      const key = new Date(monday).toISOString().slice(0, 10);
+      weekMap.set(key, monday);
+    }
+    return [...weekMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, start]) => ({
+        label,
+        cutoff: start + 7 * DAY,
+      }));
+  }, [granularity, hotspotCommits]);
+
+  // Reset the scrubber when granularity changes — the index range shifts
+  useEffect(() => {
+    setTimeIndex(null);
+    setPlaying(false);
+  }, [granularity]);
+
+  // Apply time-scrubber: recompute churn/authors/score using only commits up to cutoff
+  const allHotspots = useMemo(() => {
+    if (timeIndex == null || timeBuckets.length === 0) return rawHotspots;
+    const cutoff =
+      timeBuckets[Math.min(timeIndex, timeBuckets.length - 1)].cutoff;
+
+    return rawHotspots
+      .map((h) => {
+        const inWindow = h.commits.filter((sha) => {
+          const d = shaMeta.get(sha)?.date;
+          return d && new Date(d).getTime() <= cutoff;
+        });
+        const authors = new Set<string>();
+        let lastModified = "";
+        for (const sha of inWindow) {
+          const meta = shaMeta.get(sha);
+          if (meta?.authorLogin) authors.add(meta.authorLogin);
+          if (meta?.date && meta.date > lastModified) lastModified = meta.date;
+        }
+        const churn = inWindow.length;
+        const authorList = [...authors];
+        return {
+          ...h,
+          commits: inWindow,
+          churn,
+          authors: authorList.length,
+          authorLogins: authorList,
+          lastModified: lastModified || h.lastModified,
+          score: churn * Math.log(authorList.length + 1),
+        };
+      })
+      .filter((h) => h.churn > 0);
+  }, [rawHotspots, timeIndex, timeBuckets, shaMeta]);
+
+  // Auto-play advances timeIndex. Faster step at finer granularity so the
+  // animation feels the same duration regardless of step count.
+  const playStepMs =
+    granularity === "commit" ? 180 : granularity === "day" ? 380 : 900;
+  useEffect(() => {
+    if (!playing) return;
+    if (timeIndex == null) {
+      setTimeIndex(0);
+      return;
+    }
+    if (timeBuckets.length === 0) return;
+    const id = setTimeout(() => {
+      setTimeIndex((prev) => {
+        if (prev == null) return 0;
+        if (prev >= timeBuckets.length - 1) {
+          setPlaying(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, playStepMs);
+    return () => clearTimeout(id);
+  }, [playing, timeIndex, timeBuckets.length, playStepMs]);
+
   // Soft cap to keep canvas readable — users can reveal more via the slider.
   const MAX_VISIBLE = 60;
+  const metadataCount = useMemo(
+    () => allHotspots.filter((h) => isMetadataFile(h.path)).length,
+    [allHotspots]
+  );
   const visibleHotspots = useMemo(() => {
-    const filtered = allHotspots.filter((h) => h.churn >= minChurn);
+    const filtered = allHotspots.filter((h) => {
+      if (h.churn < minChurn) return false;
+      if (hideMetadata && isMetadataFile(h.path)) return false;
+      if (search && !h.path.toLowerCase().includes(search)) return false;
+      return true;
+    });
     return filtered
       .slice()
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_VISIBLE);
-  }, [allHotspots, minChurn]);
+  }, [allHotspots, minChurn, search, hideMetadata]);
+
   const visiblePaths = useMemo(
     () => new Set(visibleHotspots.map((h) => h.path)),
     [visibleHotspots]
@@ -417,6 +670,74 @@ function ConstellationInner({ snapshot }: Props) {
   }, [visibleHotspots]);
   const packedPositions = layout.positions;
   const folderBlocks = layout.folders;
+
+  // Auto-fit whenever the set of visible nodes changes. requestAnimationFrame
+  // gives React Flow a tick to apply the new positions before we fit.
+  useEffect(() => {
+    const id = requestAnimationFrame(() =>
+      fitView({ padding: 0.1, duration: 300 })
+    );
+    return () => cancelAnimationFrame(id);
+  }, [layout, fitView]);
+
+  // Dominant author per file: count commits per author from shaMeta (full
+  // history when available, recentCommits otherwise).
+  const { dominantAuthor, authorRank } = useMemo(() => {
+    const shaToAuthor = new Map<string, string>();
+    for (const [sha, meta] of shaMeta) {
+      if (meta.authorLogin) shaToAuthor.set(sha, meta.authorLogin);
+    }
+    const dominant = new Map<string, string>();
+    const globalCount = new Map<string, number>();
+    for (const h of allHotspots) {
+      const counts = new Map<string, number>();
+      for (const sha of h.commits ?? []) {
+        const a = shaToAuthor.get(sha);
+        if (!a) continue;
+        counts.set(a, (counts.get(a) ?? 0) + 1);
+      }
+      let best: string | null = null;
+      let bestN = 0;
+      for (const [a, n] of counts) {
+        if (n > bestN) {
+          best = a;
+          bestN = n;
+        }
+      }
+      if (!best && h.authorLogins.length > 0) best = h.authorLogins[0];
+      if (best) {
+        dominant.set(h.path, best);
+        globalCount.set(best, (globalCount.get(best) ?? 0) + 1);
+      }
+    }
+    const rank = [...globalCount.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([a], i) => [a, i] as const);
+    return {
+      dominantAuthor: dominant,
+      authorRank: new Map<string, number>(rank),
+    };
+  }, [allHotspots, shaMeta]);
+
+  const authorTintFor = (path: string) => {
+    if (colorBy !== "author") return undefined;
+    const login = dominantAuthor.get(path);
+    if (!login) return { ...AUTHOR_OTHER, authorLogin: "unknown" };
+    const idx = authorRank.get(login) ?? -1;
+    const pal = idx >= 0 && idx < AUTHOR_PALETTE.length
+      ? AUTHOR_PALETTE[idx]
+      : AUTHOR_OTHER;
+    return { ...pal, authorLogin: login };
+  };
+
+  // Top authors for the legend (max 10)
+  const authorLegend = useMemo(() => {
+    if (colorBy !== "author") return [];
+    return [...authorRank.entries()]
+      .filter(([, idx]) => idx < AUTHOR_PALETTE.length)
+      .sort((a, b) => a[1] - b[1])
+      .map(([login, idx]) => ({ login, color: AUTHOR_PALETTE[idx].ring }));
+  }, [authorRank, colorBy]);
 
   // Threshold for "hot" (top 15%)
   const hotThreshold = useMemo(() => {
@@ -459,6 +780,7 @@ function ConstellationInner({ snapshot }: Props) {
           isHot,
           isSelected,
           isDimmed,
+          authorTint: authorTintFor(h.path),
           onSelect: setSelected,
         } as FileNodeData,
         draggable: true,
@@ -467,7 +789,17 @@ function ConstellationInner({ snapshot }: Props) {
     });
 
     return [...folderNodes, ...fileNodes];
-  }, [visibleHotspots, packedPositions, folderBlocks, selected, hotThreshold, relatedPaths]);
+  }, [
+    visibleHotspots,
+    packedPositions,
+    folderBlocks,
+    selected,
+    hotThreshold,
+    relatedPaths,
+    colorBy,
+    dominantAuthor,
+    authorRank,
+  ]);
 
   const rfEdges: Edge[] = useMemo(() => {
     // Edges always kept in memory; visibility toggled via React Flow prop below.
@@ -503,9 +835,17 @@ function ConstellationInner({ snapshot }: Props) {
     >
       {/* Controls */}
       <div
-        className="absolute z-10 top-3 left-3 flex items-center gap-3 backdrop-blur rounded-lg px-3 py-2 text-xs text-white border border-white/10 shadow-lg"
+        className="absolute z-10 top-3 left-3 flex items-center gap-3 backdrop-blur rounded-lg px-3 py-2 text-xs text-white border border-white/10 shadow-lg flex-wrap max-w-[calc(100%-24px)]"
         style={{ background: "rgba(10, 10, 12, 0.92)" }}
       >
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="filter path…"
+          className="bg-white/5 text-white placeholder:text-white/40 rounded px-2 py-0.5 border border-white/10 text-xs outline-none w-36 focus:border-white/30"
+        />
+        <div className="h-4 w-px bg-white/15" />
         <div className="flex items-center gap-2">
           <label className="text-white/60">Min churn</label>
           <input
@@ -535,6 +875,31 @@ function ConstellationInner({ snapshot }: Props) {
           />
           <span>Minimap</span>
         </label>
+        {metadataCount > 0 && (
+          <label
+            className="flex items-center gap-1.5 cursor-pointer"
+            title="Hide README, package.json, CHANGELOG, lockfiles, etc."
+          >
+            <input
+              type="checkbox"
+              checked={hideMetadata}
+              onChange={(e) => setHideMetadata(e.target.checked)}
+            />
+            <span>Hide metadata ({metadataCount})</span>
+          </label>
+        )}
+        <div className="h-4 w-px bg-white/15" />
+        <label className="flex items-center gap-1.5">
+          <span className="text-white/60">Color</span>
+          <select
+            value={colorBy}
+            onChange={(e) => setColorBy(e.target.value as "type" | "author")}
+            className="bg-white/5 text-white rounded px-1.5 py-0.5 border border-white/10 text-xs outline-none cursor-pointer"
+          >
+            <option value="type">by type</option>
+            <option value="author">by author</option>
+          </select>
+        </label>
         <div className="h-4 w-px bg-white/15" />
         <span className="text-white/40 tabular-nums">
           {visibleHotspots.length}
@@ -547,16 +912,45 @@ function ConstellationInner({ snapshot }: Props) {
 
       {/* Legend */}
       <div
-        className="absolute z-10 bottom-3 left-3 backdrop-blur rounded-lg px-3 py-2 text-[11px] text-white/70 border border-white/10 shadow-lg"
+        className="absolute z-10 bottom-3 left-3 backdrop-blur rounded-lg px-3 py-2 text-[11px] text-white/70 border border-white/10 shadow-lg max-w-[calc(100%-24px)]"
         style={{ background: "rgba(10, 10, 12, 0.92)" }}
       >
-        <div>Color = file type · Bar = churn · Green dot = recent · 👥 = multi-author</div>
+        {colorBy === "type" ? (
+          <div>
+            Color = file type · Bar = churn · Green dot = recent · 👥 =
+            multi-author
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <div>
+              Color = dominant author (most commits touching the file in the
+              sample)
+            </div>
+            {authorLegend.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {authorLegend.map((a) => (
+                  <span
+                    key={a.login}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border border-white/10"
+                    style={{ background: "rgba(255,255,255,0.03)" }}
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ background: a.color }}
+                    />
+                    <span className="font-mono">{a.login}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
-        nodeTypes={nodeTypes}
+        nodeTypes={NODE_TYPES}
         fitView
         fitViewOptions={{ padding: 0.08 }}
         proOptions={{ hideAttribution: true }}
@@ -604,6 +998,67 @@ function ConstellationInner({ snapshot }: Props) {
       {allHotspots.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-white/60 text-sm">
           No hotspot data yet — try Refresh to fetch fresh commits.
+        </div>
+      )}
+
+      {timeBuckets.length > 1 && (
+        <div
+          className="absolute z-10 bottom-3 right-3 backdrop-blur rounded-lg px-3 py-2 text-[11px] text-white/80 border border-white/10 shadow-lg flex items-center gap-3"
+          style={{
+            background: "rgba(10, 10, 12, 0.92)",
+            width: "min(560px, calc(100% - 260px))",
+          }}
+        >
+          <button
+            onClick={() => {
+              if (timeIndex == null) setTimeIndex(0);
+              setPlaying((p) => !p);
+            }}
+            className="h-7 w-7 rounded-md bg-white/10 hover:bg-white/20 transition flex items-center justify-center shrink-0"
+            title={playing ? "Pause" : "Play timeline"}
+          >
+            {playing ? "⏸" : "▶"}
+          </button>
+          <select
+            value={granularity}
+            onChange={(e) =>
+              setGranularity(e.target.value as "week" | "day" | "commit")
+            }
+            className="bg-white/5 text-white rounded px-1.5 py-0.5 border border-white/10 text-[11px] outline-none cursor-pointer shrink-0"
+            title="Timeline granularity"
+          >
+            <option value="week">Week</option>
+            <option value="day">Day</option>
+            <option value="commit">Commit</option>
+          </select>
+          <input
+            type="range"
+            min={0}
+            max={timeBuckets.length - 1}
+            value={timeIndex ?? timeBuckets.length - 1}
+            onChange={(e) => {
+              setPlaying(false);
+              setTimeIndex(Number(e.target.value));
+            }}
+            className="flex-1 min-w-0"
+          />
+          <span className="text-white/70 tabular-nums font-mono shrink-0">
+            {timeIndex != null
+              ? timeBuckets[Math.min(timeIndex, timeBuckets.length - 1)].label
+              : "now"}
+          </span>
+          {timeIndex != null && (
+            <button
+              onClick={() => {
+                setTimeIndex(null);
+                setPlaying(false);
+              }}
+              className="text-white/60 hover:text-white transition text-[11px] shrink-0"
+              title="Show full timeline"
+            >
+              reset
+            </button>
+          )}
         </div>
       )}
     </div>

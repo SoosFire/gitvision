@@ -9,14 +9,18 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
+    "@types/d3-sankey": "^0.12.5",
     "@xyflow/react": "^12.10.2",
     "d3": "^7.9.0",
+    "d3-sankey": "^0.12.3",
     "html-to-image": "^1.11.13",
     "nanoid": "^5.1.9",
     "next": "16.2.4",
     "octokit": "^5.0.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "tar": "^7.5.13",
     "zod": "^4.3.6"
   },
   "devDependencies": {

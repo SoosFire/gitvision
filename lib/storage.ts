@@ -98,6 +98,25 @@ export async function renameSession(id: string, name: string): Promise<Session |
   return session;
 }
 
+/**
+ * Patch fields onto the most recent snapshot. Used by lazy-populated features
+ * (e.g. AI summary) that write back into an existing snapshot rather than
+ * appending a new one.
+ */
+export async function patchLatestSnapshot(
+  id: string,
+  patch: Partial<AnalysisSnapshot>
+): Promise<Session | null> {
+  const session = await getSession(id);
+  if (!session) return null;
+  const last = session.snapshots[session.snapshots.length - 1];
+  if (!last) return null;
+  session.snapshots[session.snapshots.length - 1] = { ...last, ...patch };
+  session.updatedAt = new Date().toISOString();
+  await fs.writeFile(sessionPath(id), JSON.stringify(session, null, 2), "utf-8");
+  return session;
+}
+
 export async function deleteSession(id: string): Promise<boolean> {
   try {
     await fs.unlink(sessionPath(id));

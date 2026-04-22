@@ -55,8 +55,67 @@ export interface CoChangeEdge {
   count: number; // number of commits that touched both
 }
 
+export interface PullRequestSummary {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  merged: boolean;
+  authorLogin: string | null;
+  createdAt: string;
+  closedAt: string | null;
+  mergedAt: string | null;
+}
+
 export interface LanguageBreakdown {
   [language: string]: number; // bytes
+}
+
+// File-dependency graph (imports + framework-specific edges).
+// Computed from the repo tarball — see lib/graph.ts.
+export interface FileGraphNode {
+  path: string;
+  ext: string; // lowercase extension without dot
+  layer: number; // BFS depth from roots (nodes with no incoming edges)
+  inDegree: number;
+  outDegree: number;
+  x: number; // pre-computed layout position
+  y: number;
+}
+
+export type FileGraphEdgeKind =
+  | "import" // language-level import
+  | "renders" // controller → template (Spring MVC, etc.)
+  | "extends" // class extends another
+  | "implements"; // class implements interface
+
+export interface FileGraphEdge {
+  from: string;
+  to: string;
+  kind: FileGraphEdgeKind;
+}
+
+export interface FileGraph {
+  nodes: FileGraphNode[];
+  edges: FileGraphEdge[];
+  stats: {
+    totalFiles: number;
+    filesByLanguage: Record<string, number>;
+    edgesByKind: Record<string, number>;
+    skipped: number; // files we couldn't parse or weren't code
+  };
+  // If non-null, graph construction was truncated — either too large
+  // or a tarball fetch error. The partial graph may still be useful.
+  truncated?: string;
+}
+
+// Compact sha → commit metadata. Populated when we have full history (via
+// lib/gitLog.ts) so the time-scrubber can resolve dates for SHAs that aren't
+// in the trimmed `recentCommits` list, and per-contributor stats can resolve
+// authors even when no GitHub login is available.
+export interface CommitIndexEntry {
+  d: string; // ISO date
+  a: string | null; // authorLogin (from noreply email, if any)
+  n: string; // authorName (always present, may be used as a grouping fallback)
 }
 
 // A single snapshot of analyzed data for a repo at a point in time.
@@ -71,6 +130,29 @@ export interface AnalysisSnapshot {
   hotspots: FileHotspot[];
   coChange: CoChangeEdge[]; // file-pair co-change relationships
   commitActivity: { week: string; count: number }[]; // weekly buckets
+  // Optional — may be absent on older snapshots or if graph build failed
+  fileGraph?: FileGraph;
+  pullRequests?: PullRequestSummary[]; // recent PRs (best-effort)
+  // Present when analysis used full `git log` history (lib/gitLog.ts). Covers
+  // every sha referenced by hotspots.commits so time-scrubber spans all years.
+  commitIndex?: Record<string, CommitIndexEntry>;
+  // Set when the user generates a Claude-written repo summary (lib/aiSummary.ts).
+  // Only populated on demand; the field is absent if the feature is off or not used.
+  aiSummary?: {
+    text: string;
+    model: string;
+    generatedAt: string;
+    usage?: { inputTokens: number; outputTokens: number };
+  };
+  // Summary of what source drove the history (useful for UI + debugging)
+  historySource?: {
+    kind: "git-log" | "rest-sample";
+    commitCount: number;
+    earliest?: string;
+    latest?: string;
+    elapsedMs?: number;
+    truncated?: string;
+  };
   rateLimitInfo?: {
     limit: number;
     remaining: number;

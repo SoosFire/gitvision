@@ -6,6 +6,7 @@ import { StatGrid } from "@/components/views/StatGrid";
 import { SinceLastVisit } from "@/components/views/SinceLastVisit";
 import { SessionToolbar } from "@/components/SessionToolbar";
 import { SessionTabs } from "@/components/SessionTabs";
+import { AiSummaryPanel } from "@/components/AiSummaryPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ export default async function SessionPage({
         sessionName={session.name}
         repoUrl={session.repoUrl}
         targetId="screenshot-target"
+        snapshot={current}
       />
 
       {/* Everything inside #screenshot-target is captured when screenshotting */}
@@ -74,6 +76,8 @@ export default async function SessionPage({
         )}
 
         <StatGrid snap={current} />
+
+        <AiSummaryPanel sessionId={session.id} snapshot={current} />
 
         <SessionTabs snap={current} />
 

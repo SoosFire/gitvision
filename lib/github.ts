@@ -10,7 +10,10 @@ import type {
   AnalysisSnapshot,
   FileHotspot,
   CoChangeEdge,
+  PullRequestSummary,
 } from "./types";
+import { buildFileGraph } from "./graph";
+import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN || undefined,
@@ -226,6 +229,48 @@ export function computeCoChange(
   return edges.slice(0, maxEdges);
 }
 
+/**
+ * Fetch recent pull requests (all states). Best-effort — errors return an empty list
+ * so analysis still proceeds on repos without PRs or with restricted access.
+ */
+export async function fetchPullRequests(
+  owner: string,
+  repo: string,
+  maxPages = 2
+): Promise<PullRequestSummary[]> {
+  const out: PullRequestSummary[] = [];
+  try {
+    for (let page = 1; page <= maxPages; page++) {
+      const { data } = await octokit.rest.pulls.list({
+        owner,
+        repo,
+        state: "all",
+        per_page: 100,
+        page,
+        sort: "created",
+        direction: "desc",
+      });
+      if (data.length === 0) break;
+      for (const pr of data) {
+        out.push({
+          number: pr.number,
+          title: pr.title.slice(0, 200),
+          state: pr.state as "open" | "closed",
+          merged: !!pr.merged_at,
+          authorLogin: pr.user?.login ?? null,
+          createdAt: pr.created_at,
+          closedAt: pr.closed_at,
+          mergedAt: pr.merged_at,
+        });
+      }
+      if (data.length < 100) break;
+    }
+  } catch {
+    // swallow — repos may not have PRs, or token may lack scope
+  }
+  return out;
+}
+
 export function computeCommitActivity(commits: CommitSummary[]): { week: string; count: number }[] {
   const buckets = new Map<string, number>();
   for (const c of commits) {
@@ -246,26 +291,123 @@ export function computeCommitActivity(commits: CommitSummary[]): { week: string;
 /**
  * High-level: produce a complete analysis snapshot.
  */
+function gitLogCommitsToPerCommitFiles(
+  commits: GitLogCommit[]
+): Map<string, { files: string[]; authorLogin: string | null; date: string }> {
+  const m = new Map<
+    string,
+    { files: string[]; authorLogin: string | null; date: string }
+  >();
+  for (const c of commits) {
+    m.set(c.sha, {
+      files: c.files,
+      authorLogin: c.authorLogin,
+      date: c.date,
+    });
+  }
+  return m;
+}
+
+function gitLogCommitsToSummaries(
+  commits: GitLogCommit[],
+  limit: number
+): CommitSummary[] {
+  // git log is already newest-first; take the first `limit`.
+  return commits.slice(0, limit).map((c) => ({
+    sha: c.sha,
+    message: c.message,
+    authorLogin: c.authorLogin,
+    authorName: c.authorName,
+    authorEmail: c.authorEmail,
+    date: c.date,
+  }));
+}
+
 export async function analyzeRepo(
   owner: string,
   repo: string
 ): Promise<AnalysisSnapshot> {
-  const [repoMeta, contributors, languages, recentCommits] = await Promise.all([
-    fetchRepoMeta(owner, repo),
-    fetchContributors(owner, repo),
-    fetchLanguages(owner, repo),
-    fetchRecentCommits(owner, repo, 3),
-  ]);
+  const [repoMeta, contributors, languages, restRecentCommits, pullRequests, history] =
+    await Promise.all([
+      fetchRepoMeta(owner, repo),
+      fetchContributors(owner, repo),
+      fetchLanguages(owner, repo),
+      fetchRecentCommits(owner, repo, 3),
+      fetchPullRequests(owner, repo, 2),
+      analyzeRepoHistory(owner, repo),
+    ]);
 
-  // For hotspots, sample the most recent 80 commits (balance of cost vs signal).
-  const hotspotShas = recentCommits.slice(0, 80).map((c) => c.sha);
-  const perCommitFiles = await fetchCommitFileChanges(owner, repo, hotspotShas);
+  const usingGitLog = history.commits.length > 0;
+
+  // Decide which commit set drives hotspots/co-change/activity/scrubber.
+  // git log gives full history with file data; REST gives 300 commits sampled
+  // + requires extra calls for file data (capped at 80).
+  let perCommitFiles: Map<
+    string,
+    { files: string[]; authorLogin: string | null; date: string }
+  >;
+  let recentCommits: CommitSummary[];
+  let historySource: AnalysisSnapshot["historySource"];
+  let commitIndex: Record<string, { d: string; a: string | null }> | undefined;
+
+  if (usingGitLog) {
+    perCommitFiles = gitLogCommitsToPerCommitFiles(history.commits);
+    recentCommits = gitLogCommitsToSummaries(history.commits, 300);
+    commitIndex = {};
+    for (const c of history.commits) {
+      commitIndex[c.sha] = { d: c.date, a: c.authorLogin, n: c.authorName };
+    }
+    const sorted = [...history.commits]
+      .map((c) => c.date)
+      .filter((d) => !!d)
+      .sort();
+    historySource = {
+      kind: "git-log",
+      commitCount: history.commits.length,
+      earliest: sorted[0],
+      latest: sorted[sorted.length - 1],
+      elapsedMs: history.elapsedMs,
+      truncated: history.truncated,
+    };
+  } else {
+    // Fallback: REST-based 80-commit sample (pre-gitLog behavior)
+    recentCommits = restRecentCommits;
+    const hotspotShas = recentCommits.slice(0, 80).map((c) => c.sha);
+    perCommitFiles = await fetchCommitFileChanges(owner, repo, hotspotShas);
+    historySource = {
+      kind: "rest-sample",
+      commitCount: recentCommits.length,
+      earliest: recentCommits[recentCommits.length - 1]?.date,
+      latest: recentCommits[0]?.date,
+      truncated: history.truncated,
+    };
+  }
+
   const allHotspots = computeHotspots(perCommitFiles);
   const hotspots = allHotspots.slice(0, 120); // top 120 files is plenty for visuals
   const allowedFiles = new Set(hotspots.map((h) => h.path));
   const coChange = computeCoChange(perCommitFiles, allowedFiles);
 
-  const commitActivity = computeCommitActivity(recentCommits);
+  // Commit activity: use the FULL source (git log = years; REST = ~sample span)
+  const activitySource: CommitSummary[] = usingGitLog
+    ? history.commits.map((c) => ({
+        sha: c.sha,
+        message: "",
+        authorLogin: c.authorLogin,
+        authorName: c.authorName,
+        authorEmail: c.authorEmail,
+        date: c.date,
+      }))
+    : recentCommits;
+  const commitActivity = computeCommitActivity(activitySource);
+
+  // Dependency graph — tarball-based. Failures are captured inline (truncated field).
+  const fileGraph = await buildFileGraph(
+    octokit,
+    owner,
+    repo,
+    repoMeta.defaultBranch
+  );
 
   // Rate limit snapshot (useful for UI)
   let rateLimitInfo: AnalysisSnapshot["rateLimitInfo"];
@@ -289,6 +431,10 @@ export async function analyzeRepo(
     hotspots,
     coChange,
     commitActivity,
+    fileGraph,
+    pullRequests,
+    commitIndex,
+    historySource,
     rateLimitInfo,
   };
 }
