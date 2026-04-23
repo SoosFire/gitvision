@@ -93,17 +93,9 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
       )}
 
       {tab === "overview" && (
-        <div className="grid lg:grid-cols-3 gap-4">
+        <div className="grid lg:grid-cols-3 gap-4 items-start">
           <div className="lg:col-span-2 flex flex-col gap-4">
-            <section>
-              <h2
-                className="text-sm font-semibold uppercase tracking-[0.2em] mb-2"
-                style={{ color: TOK.textSecondary }}
-              >
-                Hotspots
-              </h2>
-              <HotspotTreemap hotspots={snap.hotspots} />
-            </section>
+            <HotspotTreemap hotspots={snap.hotspots} />
             <CommitActivity snap={snap} />
           </div>
           <div className="flex flex-col gap-4">

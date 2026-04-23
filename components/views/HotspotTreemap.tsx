@@ -69,12 +69,18 @@ export function HotspotTreemap({
 
   return (
     <div
-      className="rounded-xl p-2 overflow-hidden"
+      className="rounded-xl p-4 overflow-hidden flex flex-col gap-3"
       style={{
         background: TOK.surface,
         border: `1px solid ${TOK.border}`,
       }}
     >
+      <h3
+        className="text-[11px] font-semibold uppercase tracking-[0.18em]"
+        style={{ color: TOK.textSecondary }}
+      >
+        Hotspots
+      </h3>
       <svg width={width} height={height} className="w-full h-auto">
         {leaves.map((node, i) => {
           const w = node.x1 - node.x0;
