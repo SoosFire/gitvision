@@ -609,7 +609,104 @@ function detectRealCodeActivity(snap: AnalysisSnapshot): HealthSignal[] {
   ];
 }
 
-// 13. Large contributor spread — many contributors = usually working
+// 13. Vulnerable dependencies — high severity flag (CVE data from OSV.dev)
+function detectVulnerableDeps(snap: AnalysisSnapshot): HealthSignal[] {
+  const h = snap.dependencyHealth;
+  if (!h || h.vulnerable.length === 0) return [];
+  const totalCves = h.vulnerable.reduce((s, d) => s + d.cves.length, 0);
+  const topPackages = h.vulnerable
+    .slice(0, 3)
+    .map((d) => `${d.name}@${d.current}`);
+  return [
+    {
+      id: "vulnerable-deps",
+      title: `${h.vulnerable.length} vulnerable dependenc${h.vulnerable.length === 1 ? "y" : "ies"}`,
+      detail: `${totalCves} known CVE${totalCves === 1 ? "" : "s"} across the dependency tree — ${topPackages.join(", ")}${h.vulnerable.length > 3 ? ` +${h.vulnerable.length - 3} more` : ""}.`,
+      evidence: {
+        paths: h.vulnerable
+          .slice(0, 5)
+          .map((d) => `${d.name}@${d.current} · ${d.cves.slice(0, 2).join(", ")}`),
+        numbers: { packages: h.vulnerable.length, cves: totalCves },
+      },
+      severity: "high",
+    },
+  ];
+}
+
+// 14. Outdated dependencies — >=1 year behind latest across N+ packages
+function detectOutdatedDeps(snap: AnalysisSnapshot): HealthSignal[] {
+  const h = snap.dependencyHealth;
+  if (!h) return [];
+  const stale = h.outdated.filter((d) => d.ageMonths >= 12);
+  if (stale.length < 3) return [];
+  const topThree = stale.slice(0, 3);
+  return [
+    {
+      id: "outdated-deps",
+      title: `${stale.length} packages ≥ 1 year behind`,
+      detail: `Stalest: ${topThree
+        .map((d) => `${d.name} (${d.ageMonths}m behind)`)
+        .join(", ")}. Upgrade candidates for a debt-reduction sprint.`,
+      evidence: {
+        paths: stale.slice(0, 5).map((d) => `${d.name}: ${d.current} → ${d.latest}`),
+        numbers: {
+          behind: stale.length,
+          totalDeps: h.total,
+          outdatedTotal: h.outdated.length,
+        },
+      },
+      severity: stale.length > 10 ? "high" : "medium",
+    },
+  ];
+}
+
+// 15. Deprecated dependencies — package explicitly deprecated on npm
+function detectDeprecatedDeps(snap: AnalysisSnapshot): HealthSignal[] {
+  const h = snap.dependencyHealth;
+  if (!h || h.deprecated.length === 0) return [];
+  return [
+    {
+      id: "deprecated-deps",
+      title: `${h.deprecated.length} deprecated dependenc${h.deprecated.length === 1 ? "y" : "ies"}`,
+      detail: `Explicitly deprecated: ${h.deprecated
+        .slice(0, 3)
+        .map((d) => d.name)
+        .join(", ")}${h.deprecated.length > 3 ? ` +${h.deprecated.length - 3}` : ""}. Find maintained alternatives.`,
+      evidence: {
+        paths: h.deprecated
+          .slice(0, 5)
+          .map((d) => `${d.name}@${d.current}: ${d.message.slice(0, 80)}`),
+        numbers: { count: h.deprecated.length },
+      },
+      severity: "medium",
+    },
+  ];
+}
+
+// 16. Fresh dependencies — counterpart to outdated (positive signal)
+function detectFreshDeps(snap: AnalysisSnapshot): HealthSignal[] {
+  const h = snap.dependencyHealth;
+  if (!h || h.total < 5) return [];
+  // Don't celebrate fresh deps when there are CVEs or deprecated ones.
+  if (h.vulnerable.length > 0 || h.deprecated.length > 0) return [];
+  const staleCount = h.outdated.filter((d) => d.ageMonths >= 12).length;
+  if (staleCount > 0) return [];
+  const somewhatStale = h.outdated.filter((d) => d.ageMonths >= 6).length;
+  // Must be genuinely fresh — less than 20% of deps even 6 months behind
+  if (somewhatStale > h.total * 0.2) return [];
+  return [
+    {
+      id: "fresh-deps",
+      title: "Dependencies are fresh",
+      detail: `${h.total} packages analyzed with no known CVEs, no deprecated entries, and nothing more than 12 months behind.`,
+      evidence: {
+        numbers: { total: h.total, somewhatStale },
+      },
+    },
+  ];
+}
+
+// 17. Large contributor spread — many contributors = usually working
 function detectContributorSpread(snap: AnalysisSnapshot): HealthSignal[] {
   if (snap.contributors.length >= 20) {
     const top = snap.contributors.slice(0, 5);
@@ -668,11 +765,17 @@ export function extractHealthSignals(snap: AnalysisSnapshot): HealthSignals {
 
   questions.push(...detectMissingHygiene(snap));
 
+  // Dependency-health detectors (from lib/depsHealth.ts data)
+  needsWork.push(...detectVulnerableDeps(snap));
+  needsWork.push(...detectOutdatedDeps(snap));
+  needsWork.push(...detectDeprecatedDeps(snap));
+
   // Solo-friendly positive detectors — these fire on team projects too, but
   // they're especially important for giving solo projects credit where due.
   working.push(...detectCommitCadence(snap));
   working.push(...detectGoodTestPresence(snap));
   working.push(...detectRealCodeActivity(snap));
+  working.push(...detectFreshDeps(snap));
   working.push(...detectContributorSpread(snap));
 
   // Sort needsWork by severity (high → low) so AI prose leads with the worst

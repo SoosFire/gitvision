@@ -118,6 +118,36 @@ export interface CommitIndexEntry {
   n: string; // authorName (always present, may be used as a grouping fallback)
 }
 
+// Dependency-health analysis for the npm ecosystem. Populated from
+// lib/depsHealth.ts at analyze time. Absent when the repo has no root
+// package.json or the analysis was skipped.
+export interface OutdatedDep {
+  name: string;
+  current: string; // exact string from package.json (may include ^ or ~)
+  latest: string;
+  ageMonths: number; // months between current release and latest release
+  lastPublished: string; // ISO date
+}
+export interface VulnerableDep {
+  name: string;
+  current: string;
+  cves: string[]; // OSV / GHSA IDs
+}
+export interface DeprecatedDep {
+  name: string;
+  current: string;
+  message: string;
+}
+export interface DependencyHealth {
+  ecosystem: "npm";
+  total: number;
+  outdated: OutdatedDep[];
+  vulnerable: VulnerableDep[];
+  deprecated: DeprecatedDep[];
+  analyzedAt: string;
+  note?: string; // truncation or partial-success reason
+}
+
 // Deterministic rule-based signal about the health of a repo. Each signal has
 // a stable id so we can add/remove detectors without breaking stored analyses.
 export interface HealthSignal {
@@ -192,6 +222,9 @@ export interface AnalysisSnapshot {
   // Definitive README presence — from GitHub's /readme endpoint, not a path
   // heuristic. Absent on pre-v0.6 snapshots.
   hasReadme?: boolean;
+  // Dependency-health analysis (npm). Absent on older snapshots or repos
+  // without a root package.json.
+  dependencyHealth?: DependencyHealth;
   rateLimitInfo?: {
     limit: number;
     remaining: number;
