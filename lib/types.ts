@@ -127,20 +127,25 @@ export interface OutdatedDep {
   latest: string;
   ageMonths: number; // months between current release and latest release
   lastPublished: string; // ISO date
+  sources?: string[]; // package.json paths that declare this dep
 }
 export interface VulnerableDep {
   name: string;
   current: string;
   cves: string[]; // OSV / GHSA IDs
+  sources?: string[];
 }
 export interface DeprecatedDep {
   name: string;
   current: string;
   message: string;
+  sources?: string[];
 }
 export interface DependencyHealth {
   ecosystem: "npm";
-  total: number;
+  total: number; // total declarations across all package.json files
+  uniquePackages?: number; // distinct (name, version) pairs analyzed
+  packageFiles?: number; // number of package.json files read (monorepo-aware)
   outdated: OutdatedDep[];
   vulnerable: VulnerableDep[];
   deprecated: DeprecatedDep[];

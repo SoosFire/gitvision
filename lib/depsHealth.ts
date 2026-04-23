@@ -37,23 +37,73 @@ export function normalizeVersion(v: string): string | null {
 
 // ------------------- Fetch root package.json -------------------
 
-async function fetchRootPackageJson(
+interface PackageJsonContent {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+}
+
+// Paths under any of these segments are almost certainly not first-party and
+// would drown meaningful monorepo-package deps in noise.
+const SKIP_PACKAGE_JSON_PATTERNS: RegExp[] = [
+  /(^|\/)node_modules\//,
+  /(^|\/)\.git\//,
+  /(^|\/)vendor\//,
+  /(^|\/)bower_components\//,
+  /(^|\/)\.next\//,
+  /(^|\/)\.cache\//,
+  /(^|\/)dist\//,
+  /(^|\/)build\//,
+  /(^|\/)coverage\//,
+  /(^|\/)out\//,
+];
+
+const MAX_PACKAGE_FILES = 50; // cap to keep Contents-API churn sane
+
+// Find every first-party package.json in the repo via the Trees API. Returns
+// paths only (content fetched separately). Single API call regardless of size.
+async function listPackageJsonPaths(
   octokit: Octokit,
   owner: string,
-  repo: string
-): Promise<{ dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string> } | null> {
+  repo: string,
+  ref: string
+): Promise<string[]> {
+  try {
+    const { data } = await octokit.rest.git.getTree({
+      owner,
+      repo,
+      tree_sha: ref,
+      recursive: "true",
+    });
+    const paths = (data.tree ?? [])
+      .filter((n) => n.type === "blob" && n.path?.endsWith("package.json"))
+      .map((n) => n.path as string)
+      .filter((p) => !SKIP_PACKAGE_JSON_PATTERNS.some((re) => re.test(p)))
+      // Sort root first, then by depth (shallower paths more likely to matter)
+      .sort((a, b) => a.split("/").length - b.split("/").length);
+    return paths.slice(0, MAX_PACKAGE_FILES);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchPackageJson(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string
+): Promise<PackageJsonContent | null> {
   try {
     const { data } = await octokit.rest.repos.getContent({
       owner,
       repo,
-      path: "package.json",
+      path,
     });
-    // Single-file response has `content` base64-encoded
     if (!("content" in data) || typeof data.content !== "string") return null;
     const decoded = Buffer.from(data.content, "base64").toString("utf-8");
     return JSON.parse(decoded);
   } catch {
-    return null; // no package.json, can't parse, or access denied
+    return null;
   }
 }
 
@@ -162,52 +212,91 @@ const MAX_PACKAGES = 300; // safety cap — OSV batch and parallel npm fetches
 export async function analyzeDependencyHealth(
   octokit: Octokit,
   owner: string,
-  repo: string
+  repo: string,
+  ref = "HEAD"
 ): Promise<DependencyHealth | null> {
-  const pkg = await fetchRootPackageJson(octokit, owner, repo);
-  if (!pkg) return null;
+  // 1. Find every first-party package.json in the repo
+  const paths = await listPackageJsonPaths(octokit, owner, repo, ref);
+  if (paths.length === 0) return null;
 
-  const allDeps: { name: string; declared: string }[] = [];
-  for (const group of [pkg.dependencies, pkg.devDependencies, pkg.peerDependencies]) {
-    if (!group) continue;
-    for (const [name, version] of Object.entries(group)) {
-      allDeps.push({ name, declared: version });
+  // 2. Fetch each (concurrency 5, don't hammer the Contents API)
+  const packageJsons = await mapWithConcurrency(paths, 5, async (path) => {
+    const content = await fetchPackageJson(octokit, owner, repo, path);
+    return { path, content };
+  });
+  const valid = packageJsons.filter((p) => p.content !== null);
+  if (valid.length === 0) return null;
+
+  // 3. Collect (name, version) pairs, tracking which package.json files
+  //    declared each so users can attribute issues back to the right module.
+  const sourcesByKey = new Map<string, Set<string>>();
+  const uniqueDeps = new Map<string, { name: string; declared: string }>();
+  for (const { path, content } of valid) {
+    for (const group of [
+      content!.dependencies,
+      content!.devDependencies,
+      content!.peerDependencies,
+    ]) {
+      if (!group) continue;
+      for (const [name, version] of Object.entries(group)) {
+        const key = `${name}@${version}`;
+        if (!uniqueDeps.has(key)) {
+          uniqueDeps.set(key, { name, declared: version as string });
+        }
+        const sources = sourcesByKey.get(key) ?? new Set<string>();
+        sources.add(path);
+        sourcesByKey.set(key, sources);
+      }
     }
   }
-  if (allDeps.length === 0) return null;
 
-  const capped = allDeps.slice(0, MAX_PACKAGES);
+  const totalDeclarations = [...sourcesByKey.values()].reduce(
+    (s, set) => s + set.size,
+    0
+  );
+  if (uniqueDeps.size === 0) return null;
+
+  const entries = [...uniqueDeps.entries()];
+  const capped = entries.slice(0, MAX_PACKAGES);
   const truncated =
-    allDeps.length > MAX_PACKAGES
-      ? `Analyzed first ${MAX_PACKAGES} of ${allDeps.length} packages`
+    entries.length > MAX_PACKAGES
+      ? `Analyzed first ${MAX_PACKAGES} of ${entries.length} unique packages across ${valid.length} package.json files`
       : undefined;
 
-  // Fetch npm metadata for each (concurrency 10)
-  const withMeta = await mapWithConcurrency(capped, 10, async (d) => {
+  // 4. Fetch npm metadata for each unique dep (concurrency 10)
+  const withMeta = await mapWithConcurrency(capped, 10, async ([key, d]) => {
     const current = normalizeVersion(d.declared);
-    if (!current) return { ...d, current: null, meta: null };
+    if (!current) return { key, ...d, current: null, meta: null };
     const meta = await fetchNpmMeta(d.name, current);
-    return { ...d, current, meta };
+    return { key, ...d, current, meta };
   });
 
-  // OSV batch — only for deps we could resolve to a concrete version
+  // 5. OSV batch — only for deps we could resolve to a concrete version
   const osvQueries = withMeta
     .filter((d) => d.current !== null)
-    .map((d) => ({ name: d.name, version: d.current as string }));
-  const osvResults = await fetchOsvBatch(osvQueries);
-
-  // Build a lookup so we can match OSV results back to the full list
-  const osvByName = new Map<string, string[]>();
+    .map((d) => ({ key: d.key, name: d.name, version: d.current as string }));
+  const osvResults = await fetchOsvBatch(
+    osvQueries.map((q) => ({ name: q.name, version: q.version }))
+  );
+  const osvByKey = new Map<string, string[]>();
   osvQueries.forEach((q, i) => {
     const ids = (osvResults[i]?.vulns ?? []).map((v) => v.id);
-    if (ids.length > 0) osvByName.set(q.name, ids);
+    if (ids.length > 0) osvByKey.set(q.key, ids);
   });
 
-  // Categorize
+  // 6. Categorize — attach sources so users can see which modules are affected
   const outdated: OutdatedDep[] = [];
   const vulnerable: VulnerableDep[] = [];
   const deprecated: DeprecatedDep[] = [];
   const OUTDATED_THRESHOLD_MONTHS = 6;
+
+  const MAX_SOURCES = 5; // cap for UI digestibility
+  function sourcesFor(key: string): string[] | undefined {
+    const set = sourcesByKey.get(key);
+    if (!set || set.size === 0) return undefined;
+    const arr = [...set].sort();
+    return arr.slice(0, MAX_SOURCES);
+  }
 
   for (const d of withMeta) {
     if (d.meta?.deprecated) {
@@ -215,6 +304,7 @@ export async function analyzeDependencyHealth(
         name: d.name,
         current: d.declared,
         message: d.meta.deprecated,
+        sources: sourcesFor(d.key),
       });
     }
 
@@ -231,17 +321,19 @@ export async function analyzeDependencyHealth(
             latest: d.meta.latest,
             ageMonths,
             lastPublished: d.meta.timeOfLatest,
+            sources: sourcesFor(d.key),
           });
         }
       }
     }
 
-    const cves = osvByName.get(d.name);
+    const cves = osvByKey.get(d.key);
     if (cves && cves.length > 0) {
       vulnerable.push({
         name: d.name,
         current: d.declared,
-        cves: cves.slice(0, 5), // cap per package so UI doesn't explode
+        cves: cves.slice(0, 5),
+        sources: sourcesFor(d.key),
       });
     }
   }
@@ -251,7 +343,9 @@ export async function analyzeDependencyHealth(
 
   return {
     ecosystem: "npm",
-    total: allDeps.length,
+    total: totalDeclarations, // total declarations across all package.jsons
+    uniquePackages: uniqueDeps.size,
+    packageFiles: valid.length,
     outdated,
     vulnerable,
     deprecated,

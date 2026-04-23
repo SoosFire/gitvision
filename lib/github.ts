@@ -364,7 +364,7 @@ export async function analyzeRepo(
     fetchPullRequests(owner, repo, 2),
     analyzeRepoHistory(owner, repo),
     fetchHasReadme(owner, repo),
-    analyzeDependencyHealth(octokit, owner, repo),
+    analyzeDependencyHealth(octokit, owner, repo, "HEAD"),
   ]);
 
   const usingGitLog = history.commits.length > 0;
