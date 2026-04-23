@@ -830,8 +830,13 @@ function ConstellationInner({ snapshot }: Props) {
 
   return (
     <div
-      className="relative rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
-      style={{ width: "100%", height: 680, background: "#0a0a0c" }}
+      className="relative rounded-xl overflow-hidden"
+      style={{
+        width: "100%",
+        height: 680,
+        background: "#0a0a0c",
+        border: "1px solid rgba(255,255,255,0.04)",
+      }}
     >
       {/* Controls */}
       <div

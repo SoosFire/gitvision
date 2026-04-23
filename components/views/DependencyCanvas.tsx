@@ -423,8 +423,14 @@ function DependencyCanvasInner({ graph }: Props) {
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-8 text-center bg-zinc-50 dark:bg-zinc-900">
-        <p className="text-zinc-500 text-sm">
+      <div
+        className="rounded-xl p-8 text-center"
+        style={{
+          background: "rgba(255,255,255,0.02)",
+          border: "1px solid rgba(255,255,255,0.04)",
+        }}
+      >
+        <p className="text-sm" style={{ color: "rgba(255,255,255,0.55)" }}>
           {graph.truncated
             ? `Dependency graph unavailable: ${graph.truncated}`
             : "No dependency data in this snapshot. Refresh to rebuild."}
@@ -435,8 +441,13 @@ function DependencyCanvasInner({ graph }: Props) {
 
   return (
     <div
-      className="relative rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
-      style={{ width: "100%", height: 720, background: "#0a0a0c" }}
+      className="relative rounded-xl overflow-hidden"
+      style={{
+        width: "100%",
+        height: 720,
+        background: "#0a0a0c",
+        border: "1px solid rgba(255,255,255,0.04)",
+      }}
     >
       <div
         className="absolute z-10 top-3 left-3 flex items-center gap-3 backdrop-blur rounded-lg px-3 py-2 text-xs text-white border border-white/10 shadow-lg max-w-[calc(100%-24px)] flex-wrap"
