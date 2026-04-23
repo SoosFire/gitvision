@@ -7,6 +7,7 @@ import { SinceLastVisit } from "@/components/views/SinceLastVisit";
 import { SessionToolbar } from "@/components/SessionToolbar";
 import { SessionTabs } from "@/components/SessionTabs";
 import { AiSummaryPanel } from "@/components/AiSummaryPanel";
+import { HealthPanel } from "@/components/HealthPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,8 @@ export default async function SessionPage({
         <StatGrid snap={current} />
 
         <AiSummaryPanel sessionId={session.id} snapshot={current} />
+
+        <HealthPanel sessionId={session.id} snapshot={current} />
 
         <SessionTabs snap={current} />
 

@@ -118,6 +118,40 @@ export interface CommitIndexEntry {
   n: string; // authorName (always present, may be used as a grouping fallback)
 }
 
+// Deterministic rule-based signal about the health of a repo. Each signal has
+// a stable id so we can add/remove detectors without breaking stored analyses.
+export interface HealthSignal {
+  id: string;
+  title: string; // short headline
+  detail: string; // one-sentence explanation
+  evidence: {
+    paths?: string[];
+    numbers?: Record<string, number>;
+    note?: string;
+  };
+  severity?: "low" | "medium" | "high"; // only meaningful on "needsWork"
+}
+
+export interface HealthSignals {
+  working: HealthSignal[]; // positive signals — things that are going well
+  needsWork: HealthSignal[]; // risks, backlogs, debt signals
+  questions: HealthSignal[]; // observations that need a human to interpret
+}
+
+// Combined rule-based signals + AI narrative for a snapshot. Cached like
+// aiSummary so regeneration is explicit.
+export interface HealthAnalysis {
+  signals: HealthSignals;
+  narrative: {
+    working: string;
+    needsWork: string;
+    questions: string;
+  };
+  model: string;
+  generatedAt: string;
+  usage?: { inputTokens: number; outputTokens: number };
+}
+
 // A single snapshot of analyzed data for a repo at a point in time.
 export interface AnalysisSnapshot {
   fetchedAt: string;
@@ -144,6 +178,8 @@ export interface AnalysisSnapshot {
     generatedAt: string;
     usage?: { inputTokens: number; outputTokens: number };
   };
+  // Rule-based + AI health check. Lazy-populated — generated on button click.
+  healthAnalysis?: HealthAnalysis;
   // Summary of what source drove the history (useful for UI + debugging)
   historySource?: {
     kind: "git-log" | "rest-sample";
