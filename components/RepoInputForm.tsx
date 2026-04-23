@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { TOK } from "@/lib/theme";
 
 // Stage labels + rough durations (ms) used to drive the indeterminate loading UI.
 // Real server progress isn't streamed (yet) — we cycle through these as a UX
@@ -14,14 +15,14 @@ const STAGES = [
   { label: "Gemmer session", weight: 2 },
 ];
 const TOTAL_WEIGHT = STAGES.reduce((a, s) => a + s.weight, 0);
-const ESTIMATED_MS = 22_000; // total estimate; progress bar stalls at 92% after this
+const ESTIMATED_MS = 22_000;
 
-export function RepoInputForm() {
+export function RepoInputForm({ demoRepos = [] }: { demoRepos?: string[] }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [stageIdx, setStageIdx] = useState(0);
-  const [progress, setProgress] = useState(0); // 0..1
+  const [progress, setProgress] = useState(0);
   const router = useRouter();
   const startTime = useRef<number | null>(null);
 
@@ -36,11 +37,9 @@ export function RepoInputForm() {
     const tick = () => {
       if (!startTime.current) return;
       const elapsed = performance.now() - startTime.current;
-      // Progress ramps to 92%; real response takes it to 100%
       const ratio = Math.min(0.92, elapsed / ESTIMATED_MS);
       setProgress(ratio);
 
-      // Pick the stage whose cumulative weight covers the elapsed fraction
       let cumul = 0;
       let idx = 0;
       const target = ratio * TOTAL_WEIGHT;
@@ -86,64 +85,130 @@ export function RepoInputForm() {
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-2">
-      <div className="relative">
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <div
+        className="flex items-center rounded-lg"
+        style={{
+          background: TOK.surface,
+          border: `1px solid ${TOK.border}`,
+        }}
+      >
         <input
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="https://github.com/owner/repo"
+          placeholder="github.com/owner/repo"
           disabled={pending}
-          className="w-full h-14 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-5 pr-32 text-base placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 disabled:opacity-50"
+          className="flex-1 bg-transparent h-12 px-4 text-base focus:outline-none disabled:opacity-50"
+          style={{ color: TOK.textPrimary }}
         />
         <button
           type="submit"
           disabled={pending || !value.trim()}
-          className="absolute right-2 top-2 bottom-2 px-5 rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 font-medium text-sm hover:opacity-90 transition disabled:opacity-40"
+          className="h-10 mr-1 px-4 rounded-md text-sm font-medium transition disabled:opacity-40"
+          style={{
+            background: TOK.accent,
+            color: TOK.accentOn,
+          }}
         >
-          {pending ? "Analyzing…" : "Analyze"}
+          {pending ? "Analyzing…" : "Analyze →"}
         </button>
       </div>
-      {error && (
-        <p className="text-sm text-red-600 dark:text-red-400 px-2">{error}</p>
+
+      {!pending && demoRepos.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs" style={{ color: TOK.textMuted }}>
+            Try with:
+          </span>
+          {demoRepos.map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setValue(r)}
+              className="text-xs font-mono px-2 py-1 rounded-md transition hover:scale-[1.02]"
+              style={{
+                background: TOK.surface,
+                border: `1px solid ${TOK.border}`,
+                color: TOK.textSecondary,
+              }}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
       )}
+
+      {error && (
+        <p className="text-sm px-1" style={{ color: TOK.rose }}>
+          {error}
+        </p>
+      )}
+
       {pending && (
         <div className="flex flex-col gap-2 mt-1 px-1">
           <div className="flex items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 min-w-0">
               <span
-                className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0"
+                className="h-2 w-2 rounded-full animate-pulse shrink-0"
+                style={{ background: TOK.accent }}
                 aria-hidden
               />
-              <span className="text-zinc-700 dark:text-zinc-300 font-medium truncate">
+              <span
+                className="font-medium truncate"
+                style={{ color: TOK.textPrimary }}
+              >
                 {STAGES[stageIdx].label}…
               </span>
             </div>
-            <span className="text-zinc-500 tabular-nums shrink-0">
+            <span
+              className="tabular-nums shrink-0"
+              style={{ color: TOK.textSecondary }}
+            >
               {Math.round(progress * 100)}%
             </span>
           </div>
-          <div className="h-1.5 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+          <div
+            className="h-1.5 w-full rounded-full overflow-hidden"
+            style={{ background: TOK.surface }}
+          >
             <div
-              className="h-full bg-gradient-to-r from-emerald-500 via-sky-500 to-violet-500 transition-[width] duration-200 ease-linear"
-              style={{ width: `${progress * 100}%` }}
+              className="h-full transition-[width] duration-200 ease-linear"
+              style={{
+                width: `${progress * 100}%`,
+                background: `linear-gradient(90deg, ${TOK.accent}, #34d399)`,
+              }}
             />
           </div>
-          <ol className="flex flex-wrap gap-1.5 text-[10px] text-zinc-400 font-mono">
-            {STAGES.map((s, i) => (
-              <li
-                key={s.label}
-                className={`px-2 py-0.5 rounded-full border ${
-                  i < stageIdx
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                    : i === stageIdx
-                    ? "border-zinc-400 dark:border-zinc-600 text-zinc-700 dark:text-zinc-300"
-                    : "border-zinc-200 dark:border-zinc-800"
-                }`}
-              >
-                {i < stageIdx ? "✓" : i === stageIdx ? "●" : "○"} {s.label}
-              </li>
-            ))}
+          <ol className="flex flex-wrap gap-1.5 text-[10px] font-mono">
+            {STAGES.map((s, i) => {
+              const done = i < stageIdx;
+              const active = i === stageIdx;
+              return (
+                <li
+                  key={s.label}
+                  className="px-2 py-0.5 rounded-full border"
+                  style={{
+                    borderColor: done
+                      ? `${TOK.accent}66`
+                      : active
+                      ? TOK.border
+                      : "rgba(255,255,255,0.05)",
+                    background: done
+                      ? TOK.accentSoft
+                      : active
+                      ? TOK.surface
+                      : "transparent",
+                    color: done
+                      ? TOK.accent
+                      : active
+                      ? TOK.textPrimary
+                      : TOK.textMuted,
+                  }}
+                >
+                  {done ? "✓" : active ? "●" : "○"} {s.label}
+                </li>
+              );
+            })}
           </ol>
         </div>
       )}

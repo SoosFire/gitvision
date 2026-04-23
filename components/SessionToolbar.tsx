@@ -1,51 +1,77 @@
 "use client";
 
-import { useState, useTransition } from "react";
+// Session topbar. Actions grouped:
+//   - Primary: Refresh (accent)
+//   - Share dropdown: Wrapped, Share card, Screenshot
+//   - Overflow menu: Delete (destructive)
+// Rename is still triggered by clicking the session name in the hero.
+
+import { useState, useTransition, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import * as htmlToImage from "html-to-image";
 import type { AnalysisSnapshot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 import { ShareCardModal } from "./ShareCardModal";
 import { ContributorWrappedModal } from "./ContributorWrappedModal";
 
 interface Props {
   sessionId: string;
   sessionName: string;
-  repoUrl: string;
-  targetId: string; // DOM id of the element to screenshot
   snapshot: AnalysisSnapshot;
+  targetId: string;
+  // Delivered from the parent session page so we know what to show in the top strip
+  updatedAtISO: string;
+  snapshotCount: number;
+}
+
+function formatRel(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = 60_000,
+    hr = 60 * min,
+    day = 24 * hr;
+  if (diff < min) return "just now";
+  if (diff < hr) return `${Math.floor(diff / min)}m ago`;
+  if (diff < day) return `${Math.floor(diff / hr)}h ago`;
+  const days = Math.floor(diff / day);
+  return days < 30 ? `${days}d ago` : new Date(iso).toLocaleDateString();
 }
 
 export function SessionToolbar({
   sessionId,
   sessionName,
-  repoUrl,
-  targetId,
   snapshot,
+  targetId,
+  updatedAtISO,
+  snapshotCount,
 }: Props) {
   const router = useRouter();
-  const [name, setName] = useState(sessionName);
-  const [editing, setEditing] = useState(false);
   const [refreshing, startRefresh] = useTransition();
   const [deleting, startDelete] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [wrappedOpen, setWrappedOpen] = useState(false);
+  const [shareMenuOpen, setShareMenuOpen] = useState(false);
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const shareMenuRef = useRef<HTMLDivElement>(null);
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
 
-  async function rename() {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === sessionName) {
-      setEditing(false);
-      setName(sessionName);
-      return;
+  // Close menus on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (shareMenuRef.current && !shareMenuRef.current.contains(e.target as Node)) {
+        setShareMenuOpen(false);
+      }
+      if (
+        overflowMenuRef.current &&
+        !overflowMenuRef.current.contains(e.target as Node)
+      ) {
+        setOverflowOpen(false);
+      }
     }
-    await fetch(`/api/sessions/${sessionId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: trimmed }),
-    });
-    setEditing(false);
-    router.refresh();
-  }
+    window.addEventListener("mousedown", handleClick);
+    return () => window.removeEventListener("mousedown", handleClick);
+  }, []);
 
   function refresh() {
     startRefresh(async () => {
@@ -72,6 +98,7 @@ export function SessionToolbar({
   }
 
   async function screenshot() {
+    setShareMenuOpen(false);
     const el = document.getElementById(targetId);
     if (!el) {
       setMessage("Couldn't find content to capture");
@@ -81,7 +108,8 @@ export function SessionToolbar({
       const dataUrl = await htmlToImage.toPng(el, {
         pixelRatio: 2,
         backgroundColor:
-          getComputedStyle(document.body).getPropertyValue("background-color") || "#ffffff",
+          getComputedStyle(document.body).getPropertyValue("background-color") ||
+          TOK.bg,
         cacheBust: true,
       });
       const link = document.createElement("a");
@@ -94,75 +122,149 @@ export function SessionToolbar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex-1 min-w-[200px]">
-        {editing ? (
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={rename}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") rename();
-              if (e.key === "Escape") {
-                setEditing(false);
-                setName(sessionName);
-              }
-            }}
-            className="text-2xl font-semibold tracking-tight bg-transparent border-b border-zinc-300 dark:border-zinc-700 focus:outline-none focus:border-emerald-500 w-full"
-          />
-        ) : (
-          <button
-            onClick={() => setEditing(true)}
-            className="text-2xl font-semibold tracking-tight hover:bg-zinc-100 dark:hover:bg-zinc-800 px-1 -mx-1 rounded transition"
-            title="Click to rename"
+    <div
+      className="border-b"
+      style={{ borderColor: TOK.border }}
+    >
+      <div className="max-w-6xl mx-auto px-8 h-14 flex items-center gap-4">
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-sm transition"
+          style={{ color: TOK.textSecondary }}
+        >
+          <span>←</span>
+          <span>All sessions</span>
+        </Link>
+        <div className="h-5 w-px" style={{ background: TOK.border }} />
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span
+            className="font-mono text-sm truncate"
+            style={{ color: TOK.textPrimary }}
           >
-            {sessionName}
+            {snapshot.repo.fullName}
+          </span>
+          <span
+            className="text-xs shrink-0"
+            style={{ color: TOK.textMuted }}
+          >
+            · updated {formatRel(updatedAtISO)} · snapshot {snapshotCount} of{" "}
+            {snapshotCount}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Share dropdown */}
+          <div ref={shareMenuRef} className="relative">
+            <button
+              onClick={() => setShareMenuOpen((v) => !v)}
+              className="h-8 px-3 rounded-md text-xs transition flex items-center gap-1.5"
+              style={{
+                background: TOK.surface,
+                border: `1px solid ${TOK.border}`,
+                color: TOK.textSecondary,
+              }}
+            >
+              <span>📸</span>
+              <span>Share</span>
+              <span style={{ color: TOK.textMuted }}>▾</span>
+            </button>
+            {shareMenuOpen && (
+              <div
+                className="absolute right-0 mt-1 w-56 rounded-lg py-1 z-50 shadow-xl"
+                style={{
+                  background: TOK.surfaceElevated,
+                  border: `1px solid ${TOK.borderStrong}`,
+                }}
+              >
+                <MenuItem
+                  icon="✨"
+                  label="Share card"
+                  hint="1200×630 branded PNG"
+                  onClick={() => {
+                    setShareMenuOpen(false);
+                    setShareOpen(true);
+                  }}
+                />
+                <MenuItem
+                  icon="🎁"
+                  label="Contributor Wrapped"
+                  hint="Per-person portrait cards"
+                  onClick={() => {
+                    setShareMenuOpen(false);
+                    setWrappedOpen(true);
+                  }}
+                />
+                <MenuItem
+                  icon="📸"
+                  label="Screenshot page"
+                  hint="Capture everything as PNG"
+                  onClick={screenshot}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Refresh — primary */}
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="h-8 px-3 rounded-md text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-40"
+            style={{
+              background: TOK.accent,
+              color: TOK.accentOn,
+            }}
+          >
+            <span>↻</span>
+            <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
           </button>
-        )}
-        <div className="text-xs text-zinc-500 font-mono mt-0.5">
-          <a href={repoUrl} target="_blank" rel="noopener" className="hover:underline">
-            {repoUrl}
-          </a>
+
+          {/* Overflow */}
+          <div ref={overflowMenuRef} className="relative">
+            <button
+              onClick={() => setOverflowOpen((v) => !v)}
+              className="h-8 w-8 rounded-md text-sm transition flex items-center justify-center"
+              style={{
+                background: TOK.surface,
+                border: `1px solid ${TOK.border}`,
+                color: TOK.textMuted,
+              }}
+              aria-label="More actions"
+            >
+              ⋯
+            </button>
+            {overflowOpen && (
+              <div
+                className="absolute right-0 mt-1 w-48 rounded-lg py-1 z-50 shadow-xl"
+                style={{
+                  background: TOK.surfaceElevated,
+                  border: `1px solid ${TOK.borderStrong}`,
+                }}
+              >
+                <MenuItem
+                  icon="🗑"
+                  label="Delete session"
+                  danger
+                  disabled={deleting}
+                  onClick={() => {
+                    setOverflowOpen(false);
+                    remove();
+                  }}
+                />
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => setWrappedOpen(true)}
-          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-        >
-          🎁 Wrapped
-        </button>
-        <button
-          onClick={() => setShareOpen(true)}
-          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-        >
-          ✨ Share card
-        </button>
-        <button
-          onClick={screenshot}
-          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
-        >
-          📸 Screenshot
-        </button>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="h-9 px-3 rounded-lg bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-sm font-medium hover:opacity-90 transition disabled:opacity-40"
-        >
-          {refreshing ? "Refreshing…" : "🔄 Refresh"}
-        </button>
-        <button
-          onClick={remove}
-          disabled={deleting}
-          className="h-9 px-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition disabled:opacity-40"
-        >
-          Delete
-        </button>
-      </div>
+
       {message && (
-        <div className="w-full text-sm text-red-600 dark:text-red-400">{message}</div>
+        <div
+          className="max-w-6xl mx-auto px-8 py-2 text-xs"
+          style={{ color: TOK.rose }}
+        >
+          {message}
+        </div>
       )}
+
       <ShareCardModal
         snapshot={snapshot}
         sessionName={sessionName}
@@ -175,5 +277,47 @@ export function SessionToolbar({
         onClose={() => setWrappedOpen(false)}
       />
     </div>
+  );
+}
+
+function MenuItem({
+  icon,
+  label,
+  hint,
+  danger,
+  disabled,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  hint?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition hover:bg-white/5 disabled:opacity-40"
+      style={{
+        color: danger ? TOK.rose : TOK.textPrimary,
+      }}
+    >
+      <span className="text-sm shrink-0" aria-hidden>
+        {icon}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div>{label}</div>
+        {hint && (
+          <div
+            className="text-[11px] mt-0.5"
+            style={{ color: TOK.textMuted }}
+          >
+            {hint}
+          </div>
+        )}
+      </div>
+    </button>
   );
 }

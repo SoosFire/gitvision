@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { AnalysisSnapshot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 import { Constellation } from "./views/Constellation";
 import { DependencyCanvas } from "./views/DependencyCanvas";
 import { PRFlow } from "./views/PRFlow";
@@ -17,46 +18,46 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
   const [tab, setTab] = useState<TabName>("canvas");
   const hasGraph = !!snap.fileGraph;
   const prCount = snap.pullRequests?.length ?? 0;
+  const depCount = snap.fileGraph?.nodes.length ?? 0;
 
   return (
     <div className="flex flex-col gap-4 w-full">
       <div
-        className="inline-flex self-start gap-1 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-1"
+        className="flex items-center border-b"
+        style={{ borderColor: TOK.border }}
         role="tablist"
       >
-        <TabButton active={tab === "canvas"} onClick={() => setTab("canvas")}>
-          Canvas
-        </TabButton>
-        <TabButton
+        <Tab
+          label="Canvas"
+          active={tab === "canvas"}
+          onClick={() => setTab("canvas")}
+        />
+        <Tab
+          label="Dependencies"
+          count={hasGraph ? depCount : undefined}
+          hint={hasGraph ? undefined : "refresh"}
           active={tab === "dependencies"}
           onClick={() => setTab("dependencies")}
-        >
-          Dependencies
-          {!hasGraph && (
-            <span className="ml-1.5 text-[10px] text-zinc-400 dark:text-zinc-500">
-              refresh
-            </span>
-          )}
-        </TabButton>
-        <TabButton active={tab === "prs"} onClick={() => setTab("prs")}>
-          PRs
-          {prCount > 0 && (
-            <span className="ml-1.5 text-[10px] text-zinc-400 dark:text-zinc-500">
-              {prCount}
-            </span>
-          )}
-        </TabButton>
-        <TabButton active={tab === "overview"} onClick={() => setTab("overview")}>
-          Overview
-        </TabButton>
+        />
+        <Tab
+          label="PRs"
+          count={prCount > 0 ? prCount : undefined}
+          active={tab === "prs"}
+          onClick={() => setTab("prs")}
+        />
+        <Tab
+          label="Overview"
+          active={tab === "overview"}
+          onClick={() => setTab("overview")}
+        />
       </div>
 
       {tab === "canvas" && (
         <div className="flex flex-col gap-4">
           <Constellation snapshot={snap} />
-          <p className="text-xs text-zinc-500">
-            Tip: drag nodes to rearrange · scroll to zoom · click a file to inspect ·
-            use the min-churn slider to focus on the most-changed files
+          <p className="text-xs" style={{ color: TOK.textMuted }}>
+            Tip: drag nodes to rearrange · scroll to zoom · click a file to
+            inspect · use the min-churn slider to focus on the most-changed files
           </p>
         </div>
       )}
@@ -66,12 +67,18 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
           {snap.fileGraph ? (
             <DependencyCanvas graph={snap.fileGraph} />
           ) : (
-            <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-8 text-center text-sm text-zinc-500">
+            <div
+              className="rounded-xl border border-dashed p-8 text-center text-sm"
+              style={{
+                borderColor: TOK.border,
+                color: TOK.textMuted,
+              }}
+            >
               This snapshot was created before the dependency graph feature
               landed. Click <strong>Refresh</strong> above to build one.
             </div>
           )}
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs" style={{ color: TOK.textMuted }}>
             File-to-file imports, extends/implements and framework-specific
             edges (e.g. Spring MVC controller → template). Layered top-down:
             entry points at top, leaves at bottom.
@@ -89,7 +96,10 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
         <div className="grid lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 flex flex-col gap-4">
             <section>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500 mb-2">
+              <h2
+                className="text-sm font-semibold uppercase tracking-[0.2em] mb-2"
+                style={{ color: TOK.textSecondary }}
+              >
                 Hotspots
               </h2>
               <HotspotTreemap hotspots={snap.hotspots} />
@@ -107,27 +117,51 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
   );
 }
 
-function TabButton({
+function Tab({
+  label,
+  count,
+  hint,
   active,
   onClick,
-  children,
 }: {
+  label: string;
+  count?: number;
+  hint?: string;
   active: boolean;
   onClick: () => void;
-  children: React.ReactNode;
 }) {
   return (
     <button
       role="tab"
       aria-selected={active}
       onClick={onClick}
-      className={`relative px-4 h-9 rounded-md text-sm font-medium transition ${
-        active
-          ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"
-          : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
-      }`}
+      className="h-10 px-3 text-sm font-medium flex items-center gap-1.5 transition"
+      style={{
+        color: active ? TOK.textPrimary : TOK.textSecondary,
+        borderBottom: active ? `2px solid ${TOK.accent}` : "2px solid transparent",
+        marginBottom: -1,
+      }}
     >
-      {children}
+      {label}
+      {count !== undefined && (
+        <span
+          className="text-[10px] font-mono px-1 rounded tabular-nums"
+          style={{
+            background: TOK.surface,
+            color: TOK.textMuted,
+          }}
+        >
+          {count}
+        </span>
+      )}
+      {hint && (
+        <span
+          className="text-[10px]"
+          style={{ color: TOK.textMuted }}
+        >
+          {hint}
+        </span>
+      )}
     </button>
   );
 }

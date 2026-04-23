@@ -1,12 +1,13 @@
 "use client";
 
-// Claude-generated repo summary. Lazy — nothing happens until the user clicks
-// "Generate". The server stores the result on the latest snapshot so next load
-// renders it immediately (no re-spend).
+// Claude-generated repo briefing. Lazy — nothing happens until the user clicks
+// "Run". The server stores the result on the latest snapshot so subsequent
+// loads render instantly (no re-spend).
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { AnalysisSnapshot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 
 interface Props {
   sessionId: string;
@@ -44,22 +45,25 @@ export function AiSummaryPanel({ sessionId, snapshot }: Props) {
     });
   }
 
+  const usd = summary?.usage
+    ? ((summary.usage.inputTokens * 3 + summary.usage.outputTokens * 15) / 1_000_000).toFixed(4)
+    : null;
+
   return (
     <section
-      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-5 bg-white dark:bg-zinc-900 flex flex-col gap-3"
-      aria-label="AI repository summary"
+      className="flex flex-col gap-3"
+      aria-label="AI repository briefing"
     >
-      <header className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <span
-            className="h-1.5 w-1.5 rounded-full bg-gradient-to-r from-emerald-500 to-violet-500"
-            aria-hidden
-          />
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
-            AI summary
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">
+            AI briefing
           </h2>
           {summary && (
-            <span className="text-xs text-zinc-400 dark:text-zinc-500 font-mono">
+            <span
+              className="text-[10px] font-mono"
+              style={{ color: TOK.textMuted }}
+            >
               · {summary.model} ·{" "}
               {new Date(summary.generatedAt).toLocaleDateString(undefined, {
                 month: "short",
@@ -72,44 +76,78 @@ export function AiSummaryPanel({ sessionId, snapshot }: Props) {
         <button
           onClick={generate}
           disabled={pending}
-          className="h-8 px-3 rounded-md text-xs font-medium border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/60 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition disabled:opacity-40"
+          className="text-xs transition disabled:opacity-40"
+          style={{ color: TOK.textSecondary }}
         >
           {pending ? (
             <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span
+                className="h-1.5 w-1.5 rounded-full animate-pulse"
+                style={{ background: TOK.accent }}
+              />
               Thinking…
             </span>
           ) : summary ? (
             "🔁 Regenerate"
           ) : (
-            "✨ Generate summary"
+            "✨ Run briefing"
           )}
         </button>
-      </header>
+      </div>
 
-      {summary ? (
-        <div className="flex flex-col gap-3">
-          <div className="text-[15px] leading-relaxed text-zinc-700 dark:text-zinc-200 whitespace-pre-wrap">
+      {!summary && !pending && (
+        <div
+          className="rounded-xl p-5 text-sm"
+          style={{
+            background: TOK.surface,
+            border: `1px solid ${TOK.border}`,
+            color: TOK.textSecondary,
+          }}
+        >
+          Claude reads this snapshot and writes a short profile — what the
+          project is, how it&apos;s built, and what&apos;s happening lately.
+          Cached on the snapshot, so it&apos;s only generated once per refresh.
+        </div>
+      )}
+
+      {summary && (
+        <article
+          className="rounded-xl p-6 flex flex-col gap-3"
+          style={{
+            background: TOK.surface,
+            border: `1px solid ${TOK.border}`,
+          }}
+        >
+          <div
+            className="text-[15px] leading-relaxed whitespace-pre-wrap"
+            style={{ color: TOK.textPrimary }}
+          >
             {summary.text}
           </div>
           {summary.usage && (
-            <div className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
-              {summary.usage.inputTokens.toLocaleString()} in ·{" "}
-              {summary.usage.outputTokens.toLocaleString()} out
+            <div
+              className="mt-2 pt-3 border-t flex items-center justify-between text-[11px] font-mono"
+              style={{ borderColor: TOK.border, color: TOK.textMuted }}
+            >
+              <span>
+                {summary.usage.inputTokens.toLocaleString()} tokens in ·{" "}
+                {summary.usage.outputTokens.toLocaleString()} out
+              </span>
+              {usd && <span>~${usd}</span>}
             </div>
           )}
-        </div>
-      ) : (
-        <p className="text-sm text-zinc-500">
-          Claude can read this snapshot and write a short profile — what the
-          project does, how it&apos;s built, and what&apos;s happening lately.
-          Stored on the snapshot, so it&apos;s only generated once per
-          refresh.
-        </p>
+        </article>
       )}
 
       {error && (
-        <div className="text-sm text-red-600 dark:text-red-400 rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-3">
+        <div
+          className="text-sm rounded-md p-3"
+          style={{
+            color: TOK.rose,
+            background: TOK.roseSoft,
+            border: `1px solid ${TOK.rose}44`,
+          }}
+        >
           {error}
         </div>
       )}

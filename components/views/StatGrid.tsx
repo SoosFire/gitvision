@@ -1,4 +1,8 @@
+// Compact inline stat pills — replaces the old 8-card grid.
+// Prioritizes fast-scan readability over table-like exhaustiveness.
+
 import type { AnalysisSnapshot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -6,42 +10,27 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
-function Stat({
-  label,
-  value,
-  hint,
-  accent,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-  accent?: string;
-}) {
+function ageLabel(createdAt: string): string {
+  const years = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24 * 365);
+  if (years < 1) {
+    const months = Math.max(1, Math.round(years * 12));
+    return `${months}m`;
+  }
+  const y = Math.floor(years);
+  const m = Math.round((years % 1) * 12);
+  return m > 0 ? `${y}y ${m}m` : `${y}y`;
+}
+
+function MetaPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="group relative rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 overflow-hidden">
-      {accent && (
-        <div
-          className="absolute inset-x-0 top-0 h-px"
-          style={{ background: accent }}
-        />
-      )}
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">
-        {label}
-      </div>
-      <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
-        {value}
-      </div>
-      {hint && (
-        <div className="text-xs text-zinc-500 mt-0.5 truncate" title={hint}>
-          {hint}
-        </div>
-      )}
+    <div className="flex items-center gap-1.5">
+      <span style={{ color: TOK.textMuted }}>{label}</span>
+      <span style={{ color: TOK.textPrimary, fontWeight: 500 }}>{value}</span>
     </div>
   );
 }
 
 export function StatGrid({ snap }: { snap: AnalysisSnapshot }) {
-  const ageYears = (Date.now() - new Date(snap.repo.createdAt).getTime()) / (1000 * 60 * 60 * 24 * 365);
   const recentCommitRate =
     snap.commitActivity.length > 0
       ? snap.commitActivity.reduce((s, d) => s + d.count, 0) /
@@ -49,48 +38,28 @@ export function StatGrid({ snap }: { snap: AnalysisSnapshot }) {
       : 0;
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      <Stat
-        label="Stars"
-        value={formatNumber(snap.repo.stars)}
-        accent="linear-gradient(90deg, transparent, #fbbf24, transparent)"
+    <div
+      className="flex items-center flex-wrap gap-x-6 gap-y-2 text-xs"
+      style={{ color: TOK.textSecondary }}
+    >
+      <MetaPill label="★" value={formatNumber(snap.repo.stars)} />
+      <MetaPill label="Forks" value={formatNumber(snap.repo.forks)} />
+      <MetaPill label="Issues" value={formatNumber(snap.repo.openIssues)} />
+      <MetaPill
+        label="License"
+        value={snap.repo.license ?? "none"}
       />
-      <Stat
-        label="Forks"
-        value={formatNumber(snap.repo.forks)}
-        accent="linear-gradient(90deg, transparent, #60a5fa, transparent)"
-      />
-      <Stat
-        label="Open issues"
-        value={formatNumber(snap.repo.openIssues)}
-        accent="linear-gradient(90deg, transparent, #f87171, transparent)"
-      />
-      <Stat
-        label="Contributors"
-        value={snap.contributors.length}
-        hint={`top ${snap.contributors.length >= 100 ? "100" : "all"} shown`}
-        accent="linear-gradient(90deg, transparent, #10b981, transparent)"
-      />
-      <Stat
-        label="Age"
-        value={`${Math.floor(ageYears)}y ${Math.round((ageYears % 1) * 12)}m`}
-        hint={`since ${new Date(snap.repo.createdAt).toLocaleDateString()}`}
-      />
-      <Stat
-        label="Recent velocity"
-        value={recentCommitRate.toFixed(1)}
-        hint="commits/week (sampled)"
-      />
-      <Stat
-        label="Primary language"
+      <MetaPill
+        label="Primary"
         value={snap.repo.language ?? "—"}
-        hint={snap.repo.license ? `License: ${snap.repo.license}` : undefined}
       />
-      <Stat
-        label="Default branch"
-        value={snap.repo.defaultBranch}
-        hint={`${snap.recentCommits.length} commits sampled`}
+      <MetaPill label="Age" value={ageLabel(snap.repo.createdAt)} />
+      <MetaPill label="Contributors" value={snap.contributors.length.toString()} />
+      <MetaPill
+        label="Velocity"
+        value={`${recentCommitRate.toFixed(1)}/wk`}
       />
+      <MetaPill label="Branch" value={snap.repo.defaultBranch} />
     </div>
   );
 }

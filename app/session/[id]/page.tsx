@@ -1,13 +1,14 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/storage";
 import { diffSnapshots } from "@/lib/diff";
+import { TOK } from "@/lib/theme";
 import { StatGrid } from "@/components/views/StatGrid";
 import { SinceLastVisit } from "@/components/views/SinceLastVisit";
 import { SessionToolbar } from "@/components/SessionToolbar";
 import { SessionTabs } from "@/components/SessionTabs";
 import { AiSummaryPanel } from "@/components/AiSummaryPanel";
 import { HealthPanel } from "@/components/HealthPanel";
+import { SessionNameEditor } from "@/components/SessionNameEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -27,75 +28,100 @@ export default async function SessionPage({
       : null;
   const diff = previous ? diffSnapshots(previous, current) : null;
 
-  const fetchedAt = new Date(current.fetchedAt).toLocaleString();
-
   return (
-    <main className="flex flex-col gap-6 px-6 py-8 max-w-7xl w-full mx-auto">
-      {/* Top bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <Link
-          href="/"
-          className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 transition"
-        >
-          ← All sessions
-        </Link>
-        <span className="text-xs text-zinc-500">
-          Fetched {fetchedAt} · {session.snapshots.length} snapshot
-          {session.snapshots.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
+    <>
       <SessionToolbar
         sessionId={session.id}
         sessionName={session.name}
-        repoUrl={session.repoUrl}
-        targetId="screenshot-target"
         snapshot={current}
+        targetId="screenshot-target"
+        updatedAtISO={session.updatedAt}
+        snapshotCount={session.snapshots.length}
       />
 
-      {/* Everything inside #screenshot-target is captured when screenshotting */}
-      <div id="screenshot-target" className="flex flex-col gap-6">
-        {diff && <SinceLastVisit diff={diff} />}
-
-        {current.repo.description && (
-          <p className="text-zinc-600 dark:text-zinc-400 max-w-3xl">
-            {current.repo.description}
-          </p>
-        )}
-
-        {current.repo.topics.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {current.repo.topics.map((t) => (
-              <span
-                key={t}
-                className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+      <main className="max-w-6xl mx-auto px-8 py-10 flex flex-col gap-10">
+        {/* Everything inside #screenshot-target is captured when screenshotting */}
+        <div id="screenshot-target" className="flex flex-col gap-10">
+          {/* Hero */}
+          <section className="flex flex-col gap-4">
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <SessionNameEditor
+                sessionId={session.id}
+                initialName={session.name}
+              />
+              <a
+                href={session.repoUrl}
+                target="_blank"
+                rel="noopener"
+                className="text-xs font-mono transition hover:underline"
+                style={{ color: TOK.textMuted }}
               >
-                {t}
+                {current.repo.fullName} ↗
+              </a>
+            </div>
+
+            {current.repo.description && (
+              <p
+                className="text-base max-w-3xl leading-relaxed"
+                style={{ color: TOK.textSecondary }}
+              >
+                {current.repo.description}
+              </p>
+            )}
+
+            <div className="pt-1">
+              <StatGrid snap={current} />
+            </div>
+
+            {current.repo.topics.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {current.repo.topics.slice(0, 12).map((t) => (
+                  <span
+                    key={t}
+                    className="text-xs px-2 py-0.5 rounded"
+                    style={{
+                      background: TOK.surface,
+                      color: TOK.textMuted,
+                      border: `1px solid ${TOK.border}`,
+                    }}
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Since last visit */}
+          {diff && <SinceLastVisit diff={diff} />}
+
+          {/* AI Summary */}
+          <AiSummaryPanel sessionId={session.id} snapshot={current} />
+
+          {/* Health Check */}
+          <HealthPanel sessionId={session.id} snapshot={current} />
+
+          {/* Tabs (Canvas / Dependencies / PRs / Overview) */}
+          <SessionTabs snap={current} />
+
+          {/* Footer */}
+          <footer
+            className="pt-6 text-xs flex items-center justify-between border-t"
+            style={{ borderColor: TOK.border, color: TOK.textMuted }}
+          >
+            <span>
+              GitVision ·{" "}
+              <span className="font-mono">{current.repo.fullName}</span>
+            </span>
+            {current.rateLimitInfo && (
+              <span>
+                Rate limit: {current.rateLimitInfo.remaining.toLocaleString()}/
+                {current.rateLimitInfo.limit.toLocaleString()}
               </span>
-            ))}
-          </div>
-        )}
-
-        <StatGrid snap={current} />
-
-        <AiSummaryPanel sessionId={session.id} snapshot={current} />
-
-        <HealthPanel sessionId={session.id} snapshot={current} />
-
-        <SessionTabs snap={current} />
-
-        <footer className="text-xs text-zinc-500 text-center pt-4 border-t border-zinc-200 dark:border-zinc-800">
-          Generated by GitVision ·{" "}
-          <span className="font-mono">{current.repo.fullName}</span>
-          {current.rateLimitInfo && (
-            <>
-              {" "}
-              · Rate limit: {current.rateLimitInfo.remaining}/
-              {current.rateLimitInfo.limit}
-            </>
-          )}
-        </footer>
-      </div>
-    </main>
+            )}
+          </footer>
+        </div>
+      </main>
+    </>
   );
 }

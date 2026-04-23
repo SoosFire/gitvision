@@ -1,67 +1,183 @@
-// Landing page: paste a GitHub URL + list of saved sessions.
+// Landing page — Linear-lighter direction.
+// URL input, demo chips, how-it-works, saved sessions as a clean list.
 
 import Link from "next/link";
 import { listSessions } from "@/lib/storage";
+import { TOK } from "@/lib/theme";
 import { RepoInputForm } from "@/components/RepoInputForm";
-import { SessionCard } from "@/components/SessionCard";
+import { SessionRow } from "@/components/SessionRow";
 
 export const dynamic = "force-dynamic";
+
+const DEMO_REPOS = [
+  "vercel/next.js",
+  "anthropics/claude-code",
+  "facebook/react",
+];
 
 export default async function Home() {
   const sessions = await listSessions();
 
   return (
-    <main className="flex flex-1 flex-col items-center px-6 py-16 canvas-dots">
-      <div className="w-full max-w-3xl flex flex-col gap-10">
-        <header className="flex flex-col gap-3 text-center">
-          <div className="inline-flex mx-auto items-center gap-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-900/60 backdrop-blur px-3 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> GitVision · v0.2
-          </div>
-          <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight">
-            See any repo as a{" "}
-            <span className="bg-gradient-to-r from-emerald-500 via-sky-500 to-violet-500 bg-clip-text text-transparent">
-              constellation
-            </span>
-            .
-          </h1>
-          <p className="text-zinc-600 dark:text-zinc-400 max-w-xl mx-auto">
-            Paste a GitHub URL. Get an interactive canvas of files, contributors, and hotspots — saved and updatable any time.
-          </p>
-        </header>
+    <main className="max-w-5xl w-full mx-auto px-8 pt-16 pb-20 flex flex-col gap-24">
+      {/* Hero */}
+      <section className="flex flex-col gap-7">
+        <div className="flex items-center gap-2">
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: TOK.accent }}
+          />
+          <span
+            className="text-xs uppercase tracking-[0.18em] font-medium"
+            style={{ color: TOK.textSecondary }}
+          >
+            v0.6 · now with AI health checks
+          </span>
+        </div>
 
-        <RepoInputForm />
+        <h1
+          className="text-5xl sm:text-6xl font-semibold tracking-tight leading-[1.05]"
+          style={{ letterSpacing: "-0.03em" }}
+        >
+          See any repo as{" "}
+          <span style={{ color: TOK.accent }}>a living map</span>.
+        </h1>
 
-        <section className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">
-              Your sessions
-            </h2>
-            <span className="text-xs text-zinc-500">
-              {sessions.length} saved
-            </span>
+        <p
+          className="text-lg max-w-xl leading-relaxed"
+          style={{ color: TOK.textSecondary }}
+        >
+          Paste a GitHub URL. Get an explorable canvas, an honest health
+          verdict, and an AI briefing — in under 20 seconds.
+        </p>
+
+        <RepoInputForm demoRepos={DEMO_REPOS} />
+      </section>
+
+      {/* How it works */}
+      <section className="flex flex-col gap-8">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">
+            How it works
+          </h2>
+          <div className="text-xs" style={{ color: TOK.textMuted }}>
+            ~20 seconds end-to-end
           </div>
-          {sessions.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-8 text-center text-sm text-zinc-500">
-              No sessions yet. Paste a URL above to start.
+        </div>
+
+        <div
+          className="grid grid-cols-1 md:grid-cols-3 gap-px overflow-hidden rounded-xl"
+          style={{ background: TOK.border }}
+        >
+          {[
+            {
+              n: "01",
+              t: "Paste",
+              d: "Any public GitHub URL. No auth needed for public repos.",
+            },
+            {
+              n: "02",
+              t: "Analyze",
+              d: "We clone history with git log, parse imports, fetch PRs, compute signals.",
+            },
+            {
+              n: "03",
+              t: "Explore",
+              d: "Canvas, dependency graph, PR flow, health check. Save as a session.",
+            },
+          ].map((s) => (
+            <div
+              key={s.n}
+              className="p-6 flex flex-col gap-3"
+              style={{ background: TOK.bg }}
+            >
+              <span
+                className="font-mono text-sm"
+                style={{ color: TOK.accent }}
+              >
+                {s.n}
+              </span>
+              <h3 className="text-base font-semibold">{s.t}</h3>
+              <p
+                className="text-sm leading-relaxed"
+                style={{ color: TOK.textSecondary }}
+              >
+                {s.d}
+              </p>
             </div>
-          ) : (
-            <ul className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-              {sessions.map((s) => (
-                <li key={s.id}>
-                  <Link href={`/session/${s.id}`} className="block">
-                    <SessionCard session={s} />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+          ))}
+        </div>
+      </section>
 
-        <footer className="text-center text-xs text-zinc-500 mt-8">
-          Tip: set <code className="px-1 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800 font-mono">GITHUB_TOKEN</code> in{" "}
-          <code className="px-1 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800 font-mono">.env.local</code> for a 5000 req/hr quota.
-        </footer>
-      </div>
+      {/* Sessions */}
+      <section className="flex flex-col gap-5">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em]">
+            Your sessions
+          </h2>
+          <div className="text-xs" style={{ color: TOK.textMuted }}>
+            {sessions.length} saved
+          </div>
+        </div>
+
+        {sessions.length === 0 ? (
+          <div
+            className="rounded-xl border border-dashed p-10 text-center text-sm"
+            style={{
+              borderColor: TOK.border,
+              color: TOK.textMuted,
+            }}
+          >
+            No sessions yet. Paste a URL above to start.
+          </div>
+        ) : (
+          <div
+            className="rounded-xl overflow-hidden"
+            style={{
+              background: TOK.surface,
+              border: `1px solid ${TOK.border}`,
+            }}
+          >
+            {sessions.map((s, i) => (
+              <Link
+                key={s.id}
+                href={`/session/${s.id}`}
+                className="block"
+              >
+                <SessionRow
+                  session={s}
+                  isLast={i === sessions.length - 1}
+                />
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Footer */}
+      <footer
+        className="pt-8 text-xs flex items-center justify-between border-t"
+        style={{ borderColor: TOK.border, color: TOK.textMuted }}
+      >
+        <span>GitVision · made by SoosFire</span>
+        <span>
+          Set{" "}
+          <code
+            className="font-mono px-1 rounded"
+            style={{ background: TOK.surface }}
+          >
+            GITHUB_TOKEN
+          </code>{" "}
+          in{" "}
+          <code
+            className="font-mono px-1 rounded"
+            style={{ background: TOK.surface }}
+          >
+            .env.local
+          </code>{" "}
+          for 5000 req/hr
+        </span>
+      </footer>
     </main>
   );
 }
