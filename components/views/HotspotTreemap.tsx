@@ -8,6 +8,45 @@ import * as d3 from "d3";
 import type { FileHotspot } from "@/lib/types";
 import { TOK } from "@/lib/theme";
 
+// Same ambiguous-basename list as the canvas — these appear all over
+// monorepos with identical names, so we prefix the parent folder to
+// disambiguate (packages/next/package.json → next/package.json).
+const AMBIGUOUS_BASENAMES = new Set([
+  "package.json",
+  "package-lock.json",
+  "readme.md",
+  "changelog.md",
+  "license",
+  "index.ts",
+  "index.tsx",
+  "index.js",
+  "index.jsx",
+  "index.html",
+  "index.md",
+  "index.mjs",
+  "cargo.toml",
+  "go.mod",
+  "__init__.py",
+  "mod.rs",
+  "lib.rs",
+  "tsconfig.json",
+  "tsconfig.build.json",
+  "jest.config.js",
+  "jest.config.ts",
+  "webpack.config.js",
+  ".gitignore",
+  "dockerfile",
+]);
+
+function fileDisplayName(path: string): string {
+  const parts = path.split("/");
+  const base = parts[parts.length - 1];
+  if (parts.length > 1 && AMBIGUOUS_BASENAMES.has(base.toLowerCase())) {
+    return `${parts[parts.length - 2]}/${base}`;
+  }
+  return base;
+}
+
 export function HotspotTreemap({
   hotspots,
   width = 800,
@@ -81,18 +120,32 @@ export function HotspotTreemap({
       >
         Hotspots
       </h3>
-      <svg width={width} height={height} className="w-full h-auto">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        className="w-full h-auto"
+      >
         {leaves.map((node, i) => {
           const w = node.x1 - node.x0;
           const h = node.y1 - node.y0;
           const file = node.data as unknown as { name: string; data: FileHotspot };
           const fill = color(file.data.authors);
-          const label = file.name.split("/").pop() ?? file.name;
+          const displayName = fileDisplayName(file.data.path);
+          // Max chars we can fit at ~7.5 px per mono char, leaving 10px padding
+          const maxChars = Math.max(0, Math.floor((w - 10) / 7.5));
+          const label =
+            maxChars >= 3
+              ? displayName.length > maxChars
+                ? displayName.slice(0, maxChars - 1) + "…"
+                : displayName
+              : "";
           return (
             <g key={i} transform={`translate(${node.x0},${node.y0})`}>
-              <title>{`${file.name}\nChurn: ${file.data.churn} commits\nAuthors: ${file.data.authors}\nScore: ${file.data.score.toFixed(2)}`}</title>
+              <title>{`${file.data.path}\nChurn: ${file.data.churn} commits\nAuthors: ${file.data.authors}\nScore: ${file.data.score.toFixed(2)}`}</title>
               <rect width={w} height={h} fill={fill} rx={3} />
-              {w > 60 && h > 20 && (
+              {/* Only render label if tile is roomy enough — skip the
+                  "truncated-to-two-letters" look on tiny tiles. */}
+              {w >= 50 && h >= 20 && label && (
                 <text
                   x={5}
                   y={14}
@@ -101,15 +154,15 @@ export function HotspotTreemap({
                   fill="rgba(255,255,255,0.9)"
                   style={{ pointerEvents: "none" }}
                 >
-                  {label.slice(0, Math.floor(w / 7))}
+                  {label}
                 </text>
               )}
-              {w > 60 && h > 36 && (
+              {w >= 70 && h >= 36 && (
                 <text
                   x={5}
                   y={28}
                   fontSize={10}
-                  fill="rgba(255,255,255,0.6)"
+                  fill="rgba(255,255,255,0.55)"
                   style={{ pointerEvents: "none" }}
                 >
                   {file.data.churn}× · {file.data.authors} auth
