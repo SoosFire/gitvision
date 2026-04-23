@@ -6,6 +6,7 @@
 import { useMemo, useState } from "react";
 import { sankey, sankeyLinkHorizontal } from "d3-sankey";
 import type { PullRequestSummary } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 
 interface Props {
   prs: PullRequestSummary[];
@@ -145,7 +146,13 @@ export function PRFlow({ prs }: Props) {
 
   if (prs.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-8 text-center text-sm text-zinc-500">
+      <div
+        className="rounded-xl border border-dashed p-8 text-center text-sm"
+        style={{
+          borderColor: TOK.border,
+          color: TOK.textMuted,
+        }}
+      >
         No PR data in this snapshot — the repo may have no PRs yet, or the
         analysis hasn&apos;t fetched them. Click <strong>Refresh</strong> if
         you expect PRs.
@@ -213,8 +220,11 @@ export function PRFlow({ prs }: Props) {
       </div>
 
       <div
-        className="rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
-        style={{ background: "#0a0a0c" }}
+        className="rounded-xl overflow-hidden"
+        style={{
+          background: TOK.bgDeep,
+          border: `1px solid ${TOK.border}`,
+        }}
       >
         <svg
           viewBox={`0 0 ${width} ${height}`}
@@ -278,10 +288,9 @@ export function PRFlow({ prs }: Props) {
         </svg>
       </div>
 
-      <p className="text-xs text-zinc-500">
-        Hover en pile-strøm for at se antal PRs. Opened → Merged / Closed (uden
-        merge) / Still open; merged PRs fordeles efter tid-til-merge. Baseret på
-        op til 200 seneste PRs.
+      <p className="text-xs" style={{ color: TOK.textMuted }}>
+        Hover a flow to see PR counts. Opened → Merged / Closed / Still-open;
+        merged PRs bucket by time-to-merge. Based on up to 200 recent PRs.
       </p>
     </div>
   );
@@ -297,12 +306,30 @@ function Stat({
   note?: string;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
-      <div className="text-xs uppercase tracking-wider text-zinc-500">
+    <div
+      className="rounded-xl p-4"
+      style={{
+        background: TOK.surface,
+        border: `1px solid ${TOK.border}`,
+      }}
+    >
+      <div
+        className="text-[10px] uppercase tracking-[0.18em] font-medium"
+        style={{ color: TOK.textMuted }}
+      >
         {label}
       </div>
-      <div className="text-2xl font-semibold mt-1">{value}</div>
-      {note && <div className="text-xs text-zinc-500 mt-0.5">{note}</div>}
+      <div
+        className="text-2xl font-semibold mt-1 tabular-nums"
+        style={{ color: TOK.textPrimary }}
+      >
+        {value}
+      </div>
+      {note && (
+        <div className="text-xs mt-0.5" style={{ color: TOK.textMuted }}>
+          {note}
+        </div>
+      )}
     </div>
   );
 }

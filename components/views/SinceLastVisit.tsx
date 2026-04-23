@@ -1,6 +1,7 @@
 // Slim ribbon summarizing what changed since the previous snapshot.
 // Replaces the large card version — same data, much less vertical real estate.
 
+import { RefreshCw } from "lucide-react";
 import type { SnapshotDiff } from "@/lib/diff";
 import { TOK } from "@/lib/theme";
 
@@ -62,7 +63,7 @@ export function SinceLastVisit({ diff }: { diff: SnapshotDiff }) {
             color: TOK.textMuted,
           }}
         >
-          ⟳
+          <RefreshCw size={13} />
         </span>
         <span>Nothing new since your last visit.</span>
         <span className="ml-auto text-xs" style={{ color: TOK.textMuted }}>
@@ -81,14 +82,14 @@ export function SinceLastVisit({ diff }: { diff: SnapshotDiff }) {
       }}
     >
       <div
-        className="h-8 w-8 rounded-lg flex items-center justify-center text-sm shrink-0"
+        className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
         style={{
           background: TOK.accentSoft,
           color: TOK.accent,
           border: `1px solid ${TOK.accent}44`,
         }}
       >
-        ⟳
+        <RefreshCw size={14} />
       </div>
       <div className="flex-1 min-w-0">
         <div

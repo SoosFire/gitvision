@@ -10,6 +10,17 @@ import { useState, useTransition, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import * as htmlToImage from "html-to-image";
+import {
+  ArrowLeft,
+  Camera,
+  ChevronDown,
+  Gift,
+  MoreHorizontal,
+  RefreshCw,
+  Share2,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import type { AnalysisSnapshot } from "@/lib/types";
 import { TOK } from "@/lib/theme";
 import { ShareCardModal } from "./ShareCardModal";
@@ -129,10 +140,10 @@ export function SessionToolbar({
       <div className="max-w-6xl mx-auto px-8 h-14 flex items-center gap-4">
         <Link
           href="/"
-          className="flex items-center gap-2 text-sm transition"
+          className="flex items-center gap-1.5 text-sm transition"
           style={{ color: TOK.textSecondary }}
         >
-          <span>←</span>
+          <ArrowLeft size={14} />
           <span>All sessions</span>
         </Link>
         <div className="h-5 w-px" style={{ background: TOK.border }} />
@@ -157,16 +168,16 @@ export function SessionToolbar({
           <div ref={shareMenuRef} className="relative">
             <button
               onClick={() => setShareMenuOpen((v) => !v)}
-              className="h-8 px-3 rounded-md text-xs transition flex items-center gap-1.5"
+              className="h-8 px-3 rounded-md text-xs transition flex items-center gap-1.5 hover:bg-white/5"
               style={{
                 background: TOK.surface,
                 border: `1px solid ${TOK.border}`,
                 color: TOK.textSecondary,
               }}
             >
-              <span>📸</span>
+              <Share2 size={14} />
               <span>Share</span>
-              <span style={{ color: TOK.textMuted }}>▾</span>
+              <ChevronDown size={12} style={{ color: TOK.textMuted }} />
             </button>
             {shareMenuOpen && (
               <div
@@ -177,7 +188,7 @@ export function SessionToolbar({
                 }}
               >
                 <MenuItem
-                  icon="✨"
+                  icon={<Sparkles size={14} />}
                   label="Share card"
                   hint="1200×630 branded PNG"
                   onClick={() => {
@@ -186,7 +197,7 @@ export function SessionToolbar({
                   }}
                 />
                 <MenuItem
-                  icon="🎁"
+                  icon={<Gift size={14} />}
                   label="Contributor Wrapped"
                   hint="Per-person portrait cards"
                   onClick={() => {
@@ -195,7 +206,7 @@ export function SessionToolbar({
                   }}
                 />
                 <MenuItem
-                  icon="📸"
+                  icon={<Camera size={14} />}
                   label="Screenshot page"
                   hint="Capture everything as PNG"
                   onClick={screenshot}
@@ -208,13 +219,16 @@ export function SessionToolbar({
           <button
             onClick={refresh}
             disabled={refreshing}
-            className="h-8 px-3 rounded-md text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-40"
+            className="h-8 px-3 rounded-md text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-40 hover:brightness-110"
             style={{
               background: TOK.accent,
               color: TOK.accentOn,
             }}
           >
-            <span>↻</span>
+            <RefreshCw
+              size={13}
+              className={refreshing ? "animate-spin" : ""}
+            />
             <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
           </button>
 
@@ -222,7 +236,7 @@ export function SessionToolbar({
           <div ref={overflowMenuRef} className="relative">
             <button
               onClick={() => setOverflowOpen((v) => !v)}
-              className="h-8 w-8 rounded-md text-sm transition flex items-center justify-center"
+              className="h-8 w-8 rounded-md transition flex items-center justify-center hover:bg-white/5"
               style={{
                 background: TOK.surface,
                 border: `1px solid ${TOK.border}`,
@@ -230,7 +244,7 @@ export function SessionToolbar({
               }}
               aria-label="More actions"
             >
-              ⋯
+              <MoreHorizontal size={14} />
             </button>
             {overflowOpen && (
               <div
@@ -241,7 +255,7 @@ export function SessionToolbar({
                 }}
               >
                 <MenuItem
-                  icon="🗑"
+                  icon={<Trash2 size={14} />}
                   label="Delete session"
                   danger
                   disabled={deleting}
@@ -288,7 +302,7 @@ function MenuItem({
   disabled,
   onClick,
 }: {
-  icon: string;
+  icon: React.ReactNode;
   label: string;
   hint?: string;
   danger?: boolean;
@@ -304,7 +318,7 @@ function MenuItem({
         color: danger ? TOK.rose : TOK.textPrimary,
       }}
     >
-      <span className="text-sm shrink-0" aria-hidden>
+      <span className="shrink-0 mt-0.5" aria-hidden>
         {icon}
       </span>
       <div className="flex-1 min-w-0">

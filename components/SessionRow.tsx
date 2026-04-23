@@ -1,6 +1,7 @@
 // Single row in the landing-page sessions list. Replaces the old SessionCard.
 // Designed to sit inside a shared rounded container with hairline dividers.
 
+import { ChevronRight } from "lucide-react";
 import type { SessionSummary } from "@/lib/types";
 import { TOK } from "@/lib/theme";
 
@@ -57,13 +58,11 @@ export function SessionRow({
       >
         {session.snapshotCount} snap{session.snapshotCount === 1 ? "" : "s"}
       </div>
-      <span
-        className="text-sm shrink-0"
+      <ChevronRight
+        size={14}
+        className="shrink-0"
         style={{ color: TOK.textMuted }}
-        aria-hidden
-      >
-        →
-      </span>
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { ExternalLink } from "lucide-react";
 import { getSession } from "@/lib/storage";
 import { diffSnapshots } from "@/lib/diff";
 import { TOK } from "@/lib/theme";
@@ -53,10 +54,11 @@ export default async function SessionPage({
                 href={session.repoUrl}
                 target="_blank"
                 rel="noopener"
-                className="text-xs font-mono transition hover:underline"
+                className="text-xs font-mono transition hover:underline inline-flex items-center gap-1"
                 style={{ color: TOK.textMuted }}
               >
-                {current.repo.fullName} ↗
+                <span>{current.repo.fullName}</span>
+                <ExternalLink size={11} />
               </a>
             </div>
 

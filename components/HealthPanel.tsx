@@ -6,6 +6,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { RotateCw, Stethoscope } from "lucide-react";
 import type { AnalysisSnapshot, HealthSignal } from "@/lib/types";
 import { TOK } from "@/lib/theme";
 
@@ -72,21 +73,27 @@ export function HealthPanel({ sessionId, snapshot }: Props) {
         <button
           onClick={generate}
           disabled={pending}
-          className="text-xs transition disabled:opacity-40"
-          style={{ color: TOK.textSecondary }}
+          className="text-xs transition disabled:opacity-40 flex items-center gap-1.5"
+          style={{ color: analysis ? TOK.textSecondary : TOK.accent }}
         >
           {pending ? (
-            <span className="flex items-center gap-1.5">
+            <>
               <span
                 className="h-1.5 w-1.5 rounded-full animate-pulse"
                 style={{ background: TOK.accent }}
               />
-              Analyzing…
-            </span>
+              <span>Analyzing…</span>
+            </>
           ) : analysis ? (
-            "🔁 Regenerate"
+            <>
+              <RotateCw size={12} />
+              <span>Regenerate</span>
+            </>
           ) : (
-            "🩺 Run health check"
+            <>
+              <Stethoscope size={12} />
+              <span>Run health check</span>
+            </>
           )}
         </button>
       </div>

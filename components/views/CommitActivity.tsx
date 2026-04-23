@@ -1,4 +1,5 @@
 import type { AnalysisSnapshot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 
 export function CommitActivity({ snap }: { snap: AnalysisSnapshot }) {
   const data = snap.commitActivity;
@@ -8,10 +9,22 @@ export function CommitActivity({ snap }: { snap: AnalysisSnapshot }) {
   const max = Math.max(...data.map((d) => d.count));
 
   return (
-    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
-      <h3 className="text-sm font-semibold mb-3">
-        Weekly commit activity{" "}
-        <span className="text-xs text-zinc-500 font-normal">
+    <div
+      className="rounded-xl p-4"
+      style={{
+        background: TOK.surface,
+        border: `1px solid ${TOK.border}`,
+      }}
+    >
+      <h3
+        className="text-[11px] font-semibold uppercase tracking-[0.18em] mb-3 flex items-baseline gap-2"
+        style={{ color: TOK.textSecondary }}
+      >
+        Weekly commit activity
+        <span
+          className="text-[10px] normal-case tracking-normal font-normal"
+          style={{ color: TOK.textMuted }}
+        >
           · from sampled commits
         </span>
       </h3>
@@ -20,12 +33,22 @@ export function CommitActivity({ snap }: { snap: AnalysisSnapshot }) {
           <div
             key={d.week}
             title={`${d.week}: ${d.count} commits`}
-            className="flex-1 min-w-[4px] bg-emerald-500/70 hover:bg-emerald-500 rounded-sm"
-            style={{ height: `${(d.count / max) * 100}%` }}
+            className="flex-1 min-w-[4px] rounded-sm transition-colors"
+            style={{
+              height: `${Math.max(2, (d.count / max) * 100)}%`,
+              background:
+                d.count === 0
+                  ? "rgba(255,255,255,0.04)"
+                  : TOK.accent,
+              opacity: d.count === 0 ? 1 : 0.75,
+            }}
           />
         ))}
       </div>
-      <div className="mt-2 flex justify-between text-[10px] text-zinc-500">
+      <div
+        className="mt-2 flex justify-between text-[10px] font-mono"
+        style={{ color: TOK.textMuted }}
+      >
         <span>{data[0].week}</span>
         <span>{data[data.length - 1].week}</span>
       </div>

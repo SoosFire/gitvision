@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import * as d3 from "d3";
 import type { FileHotspot } from "@/lib/types";
+import { TOK } from "@/lib/theme";
 
 export function HotspotTreemap({
   hotspots,
@@ -39,18 +40,27 @@ export function HotspotTreemap({
 
   if (!layout) {
     return (
-      <div className="text-sm text-zinc-500 p-8 text-center">
+      <div
+        className="text-sm p-8 text-center rounded-xl border"
+        style={{
+          color: TOK.textMuted,
+          background: TOK.surface,
+          borderColor: TOK.border,
+        }}
+      >
         No commit-file data available. Try re-running on a more active repo.
       </div>
     );
   }
 
   // Author-diversity color scale — more unique authors = hotter.
+  // Muted palette that reads well on dark: teal → emerald → amber → rose
   const maxAuthors = Math.max(1, ...hotspots.map((h) => h.authors));
   const color = d3
-    .scaleSequential<string>()
-    .domain([0, maxAuthors])
-    .interpolator(d3.interpolateYlOrRd);
+    .scaleLinear<string>()
+    .domain([0, maxAuthors * 0.33, maxAuthors * 0.66, maxAuthors])
+    .range(["#134e4a", "#065f46", "#b45309", "#991b1b"])
+    .clamp(true);
 
   const leaves = layout.leaves() as d3.HierarchyRectangularNode<{
     name: string;
@@ -58,7 +68,13 @@ export function HotspotTreemap({
   }>[];
 
   return (
-    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2 overflow-hidden">
+    <div
+      className="rounded-xl p-2 overflow-hidden"
+      style={{
+        background: TOK.surface,
+        border: `1px solid ${TOK.border}`,
+      }}
+    >
       <svg width={width} height={height} className="w-full h-auto">
         {leaves.map((node, i) => {
           const w = node.x1 - node.x0;
@@ -76,7 +92,7 @@ export function HotspotTreemap({
                   y={14}
                   fontSize={11}
                   fontFamily="var(--font-geist-mono)"
-                  fill="rgba(0,0,0,0.75)"
+                  fill="rgba(255,255,255,0.9)"
                   style={{ pointerEvents: "none" }}
                 >
                   {label.slice(0, Math.floor(w / 7))}
@@ -87,7 +103,7 @@ export function HotspotTreemap({
                   x={5}
                   y={28}
                   fontSize={10}
-                  fill="rgba(0,0,0,0.55)"
+                  fill="rgba(255,255,255,0.6)"
                   style={{ pointerEvents: "none" }}
                 >
                   {file.data.churn}× · {file.data.authors} auth
@@ -97,7 +113,10 @@ export function HotspotTreemap({
           );
         })}
       </svg>
-      <div className="flex items-center justify-between text-xs text-zinc-500 px-2 py-1">
+      <div
+        className="flex items-center justify-between text-xs px-2 py-1"
+        style={{ color: TOK.textMuted }}
+      >
         <span>Size = churn · Color = unique authors</span>
         <div className="flex items-center gap-2">
           <span>less diverse</span>

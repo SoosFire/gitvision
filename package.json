@@ -15,6 +15,7 @@
     "d3": "^7.9.0",
     "d3-sankey": "^0.12.3",
     "html-to-image": "^1.11.13",
+    "lucide-react": "^1.9.0",
     "nanoid": "^5.1.9",
     "next": "16.2.4",
     "octokit": "^5.0.5",
