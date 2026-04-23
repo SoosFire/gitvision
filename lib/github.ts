@@ -231,6 +231,24 @@ export function computeCoChange(
 }
 
 /**
+ * Does this repo have a README (any variant)? Uses GitHub's dedicated endpoint
+ * which searches for README.md, README, readme.rst, etc. case-insensitively.
+ * Much more reliable than scanning our hotspot/fileGraph paths — READMEs are
+ * often stable (no churn) and may live outside the dep-graph's visible area.
+ */
+export async function fetchHasReadme(
+  owner: string,
+  repo: string
+): Promise<boolean> {
+  try {
+    await octokit.rest.repos.getReadme({ owner, repo });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch recent pull requests (all states). Best-effort — errors return an empty list
  * so analysis still proceeds on repos without PRs or with restricted access.
  */
@@ -328,15 +346,23 @@ export async function analyzeRepo(
   owner: string,
   repo: string
 ): Promise<AnalysisSnapshot> {
-  const [repoMeta, contributors, languages, restRecentCommits, pullRequests, history] =
-    await Promise.all([
-      fetchRepoMeta(owner, repo),
-      fetchContributors(owner, repo),
-      fetchLanguages(owner, repo),
-      fetchRecentCommits(owner, repo, 3),
-      fetchPullRequests(owner, repo, 2),
-      analyzeRepoHistory(owner, repo),
-    ]);
+  const [
+    repoMeta,
+    contributors,
+    languages,
+    restRecentCommits,
+    pullRequests,
+    history,
+    hasReadme,
+  ] = await Promise.all([
+    fetchRepoMeta(owner, repo),
+    fetchContributors(owner, repo),
+    fetchLanguages(owner, repo),
+    fetchRecentCommits(owner, repo, 3),
+    fetchPullRequests(owner, repo, 2),
+    analyzeRepoHistory(owner, repo),
+    fetchHasReadme(owner, repo),
+  ]);
 
   const usingGitLog = history.commits.length > 0;
 
@@ -436,6 +462,7 @@ export async function analyzeRepo(
     pullRequests,
     commitIndex,
     historySource,
+    hasReadme,
     rateLimitInfo,
   };
 }

@@ -13,7 +13,32 @@ import type {
   HealthSignal,
   HealthSignals,
   FileHotspot,
+  FileGraph,
 } from "./types";
+
+// ------------------- Bot detection -------------------
+// PR cycle-time and throughput should reflect *human* workflow, not bot churn.
+// Bots like dependabot auto-merge minutes after opening and skew the median.
+
+const BOT_LOGIN_PATTERNS: RegExp[] = [
+  /\[bot\]$/i,
+  /-bot$/i,
+  /^bot-/i,
+  /^dependabot/i,
+  /^renovate/i,
+  /^github-actions/i,
+  /^vercel-release/i,
+  /^mergify/i,
+  /^codecov/i,
+  /^snyk-bot/i,
+  /^greenkeeper/i,
+  /^imgbot/i,
+];
+
+function isBotAuthor(login: string | null): boolean {
+  if (!login) return false;
+  return BOT_LOGIN_PATTERNS.some((re) => re.test(login));
+}
 
 // ------------------- File-classification helpers -------------------
 
@@ -137,29 +162,56 @@ function folderOf(path: string): string {
   return parts.length > 1 ? parts[0] : "/";
 }
 
-// Does this hotspot have a plausible test-file sibling somewhere in the repo?
+// Three-layer test-coverage detection — most precise signal wins.
+//
+//   1. Sibling file: `foo.test.ts` next to `foo.ts`, `__tests__/foo.ts`, etc.
+//   2. Import edge:  a test file that directly imports the hotspot
+//   3. Name match:   a test file whose name contains the hotspot's basename
+//
+// Real-world test layouts (Next.js test/unit/..., React packages/*/src/__tests__/)
+// don't fit sibling patterns, so we need broader signals to avoid false positives.
 function hasTestCoverage(
   hotspot: FileHotspot,
-  allKnownPaths: Set<string>
+  allKnownPaths: Set<string>,
+  allTests: Set<string>,
+  fileGraph: FileGraph | undefined
 ): boolean {
+  // Layer 1: sibling patterns
   const base = fileBasename(hotspot.path);
   const nameNoExt = base.replace(/\.[^.]+$/, "");
   const ext = base.slice(nameNoExt.length);
   const dir = hotspot.path.slice(0, -base.length);
 
-  const candidates = [
+  const siblings = [
     `${dir}${nameNoExt}.test${ext}`,
     `${dir}${nameNoExt}.spec${ext}`,
     `${dir}__tests__/${base}`,
     `${dir}tests/${base}`,
     `${dir}test/${base}`,
-    // For Go: foo.go → foo_test.go
     ext === ".go" ? `${dir}${nameNoExt}_test.go` : "",
-    // For Python: foo.py → test_foo.py
     ext === ".py" ? `${dir}test_${nameNoExt}.py` : "",
   ].filter(Boolean);
+  if (siblings.some((c) => allKnownPaths.has(c))) return true;
 
-  return candidates.some((c) => allKnownPaths.has(c));
+  // Layer 2: any test file directly imports this hotspot via fileGraph
+  if (fileGraph) {
+    for (const edge of fileGraph.edges) {
+      if (edge.to === hotspot.path && isTestFile(edge.from)) return true;
+    }
+  }
+
+  // Layer 3: a test file's basename contains the hotspot's basename.
+  // Only useful when the name is distinctive (≥ 4 chars) to avoid matching
+  // generic names like "index" or "utils" everywhere.
+  const nameLower = nameNoExt.toLowerCase();
+  if (nameLower.length >= 4 && nameLower !== "index" && nameLower !== "utils") {
+    for (const test of allTests) {
+      const testBase = (test.split("/").pop() ?? "").toLowerCase();
+      if (testBase.includes(nameLower)) return true;
+    }
+  }
+
+  return false;
 }
 
 // Median helper for cycle-time calculations.
@@ -174,7 +226,10 @@ function median(nums: number[]): number {
 
 // ------------------- Detectors -------------------
 
-// 1. PR throughput — healthy merge vs. open ratio (working) OR backlog (needsWork)
+// 1. PR throughput — healthy merge vs. open ratio (working) OR backlog (needsWork).
+// Excludes bot-authored PRs because they distort the "is review keeping up?" signal:
+// dependabot can file 50 PRs in a day and auto-merge them all, making throughput
+// look healthy even when human PRs pile up.
 function detectPrThroughput(
   snap: AnalysisSnapshot
 ): { working: HealthSignal[]; needsWork: HealthSignal[] } {
@@ -183,9 +238,9 @@ function detectPrThroughput(
   if (!snap.pullRequests || snap.pullRequests.length === 0) {
     return { working, needsWork };
   }
-  const prs = snap.pullRequests;
-  const merged = prs.filter((p) => p.merged).length;
-  const open = prs.filter((p) => p.state === "open").length;
+  const humanPrs = snap.pullRequests.filter((p) => !isBotAuthor(p.authorLogin));
+  const merged = humanPrs.filter((p) => p.merged).length;
+  const open = humanPrs.filter((p) => p.state === "open").length;
   const total = merged + open;
   if (total < 5) return { working, needsWork };
 
@@ -193,7 +248,7 @@ function detectPrThroughput(
     working.push({
       id: "healthy-pr-throughput",
       title: "Healthy review throughput",
-      detail: `${merged} merged vs ${open} open in recent PRs — review keeps pace with intake.`,
+      detail: `${merged} merged vs ${open} open among human-authored PRs — review keeps pace with intake.`,
       evidence: { numbers: { merged, open } },
     });
   } else if (open > merged * 1.5) {
@@ -201,7 +256,7 @@ function detectPrThroughput(
     needsWork.push({
       id: "pr-backlog",
       title: "PR backlog growing",
-      detail: `${open} PRs open against ${merged} recently merged (${ratio}× intake) — review is the bottleneck.`,
+      detail: `${open} human-authored PRs open against ${merged} recently merged (${ratio}× intake) — review is the bottleneck.`,
       evidence: { numbers: { open, merged } },
       severity: open > merged * 3 ? "high" : "medium",
     });
@@ -209,14 +264,21 @@ function detectPrThroughput(
   return { working, needsWork };
 }
 
-// 2. PR cycle time — fast merges (working) vs. slow reviews (needsWork)
+// 2. PR cycle time — fast merges (working) vs. slow reviews (needsWork).
+// Bot-authored PRs (dependabot, renovate, release-bot) typically merge in
+// minutes and drag the median artificially low. Filter them out to get a
+// cycle-time signal that reflects human review workflow.
 function detectPrCycleTime(
   snap: AnalysisSnapshot
 ): { working: HealthSignal[]; needsWork: HealthSignal[] } {
   const working: HealthSignal[] = [];
   const needsWork: HealthSignal[] = [];
   const mergedPRs = (snap.pullRequests ?? []).filter(
-    (p) => p.merged && p.createdAt && p.mergedAt
+    (p) =>
+      p.merged &&
+      p.createdAt &&
+      p.mergedAt &&
+      !isBotAuthor(p.authorLogin)
   );
   if (mergedPRs.length < 5) return { working, needsWork };
 
@@ -231,14 +293,14 @@ function detectPrCycleTime(
     working.push({
       id: "fast-pr-cycle",
       title: "Fast PR cycle",
-      detail: `Median time-to-merge is ${medianDays.toFixed(1)} days across ${mergedPRs.length} recent merges — team ships quickly.`,
+      detail: `Median time-to-merge is ${medianDays.toFixed(1)} days across ${mergedPRs.length} recent human-authored merges — team ships quickly.`,
       evidence: { numbers: { medianDays: +medianDays.toFixed(1), sampled: mergedPRs.length } },
     });
   } else if (medianDays >= 14) {
     needsWork.push({
       id: "slow-pr-cycle",
       title: "Slow PR reviews",
-      detail: `PRs take a median of ${medianDays.toFixed(0)} days to merge — review friction is real.`,
+      detail: `Human-authored PRs take a median of ${medianDays.toFixed(0)} days to merge — review friction is real.`,
       evidence: { numbers: { medianDays: +medianDays.toFixed(1), sampled: mergedPRs.length } },
       severity: medianDays > 30 ? "high" : "medium",
     });
@@ -299,19 +361,25 @@ function detectKnowledgeDistribution(
   return { working, needsWork };
 }
 
-// 4. Test coverage signal (needsWork only — rarely brag-worthy even at 100%
-// because we only check sibling files, not actual assertions)
+// 4. Untested hotspots — only fires when test presence is genuinely thin.
+// Global gate: if the repo has many tests globally (≥ 30, or ≥ 25% of code
+// files), the test layout just isn't sibling/import-discoverable and we'd
+// rather stay silent than cry wolf.
 function detectUntestedHotspots(snap: AnalysisSnapshot): HealthSignal[] {
-  const allPaths = new Set<string>();
-  snap.hotspots.forEach((h) => allPaths.add(h.path));
-  snap.fileGraph?.nodes.forEach((n) => allPaths.add(n.path));
+  const { allPaths, allTests, codeFileCount } = collectPathIndices(snap);
 
   const codeHotspots = snap.hotspots
     .slice(0, 25)
     .filter((h) => isCodeFile(h.path));
   if (codeHotspots.length < 5) return [];
 
-  const untested = codeHotspots.filter((h) => !hasTestCoverage(h, allPaths));
+  // Global sanity gate — plenty of tests exist, we just can't connect them.
+  if (allTests.size >= 30) return [];
+  if (codeFileCount > 0 && allTests.size / codeFileCount >= 0.25) return [];
+
+  const untested = codeHotspots.filter(
+    (h) => !hasTestCoverage(h, allPaths, allTests, snap.fileGraph)
+  );
   const pct = Math.round((untested.length / codeHotspots.length) * 100);
   if (pct < 50) return [];
 
@@ -319,7 +387,7 @@ function detectUntestedHotspots(snap: AnalysisSnapshot): HealthSignal[] {
     {
       id: "untested-hotspots",
       title: "Hot files lack visible tests",
-      detail: `${pct}% of the top-churn code files have no sibling test file — regressions in these areas are easy to miss.`,
+      detail: `${pct}% of the top-churn code files have no discoverable test — regressions in these areas are easy to miss.`,
       evidence: {
         paths: untested.slice(0, 3).map((h) => h.path),
         numbers: { pctUntested: pct, sampled: codeHotspots.length },
@@ -327,6 +395,24 @@ function detectUntestedHotspots(snap: AnalysisSnapshot): HealthSignal[] {
       severity: pct > 80 ? "high" : "medium",
     },
   ];
+}
+
+// Helper — build path indices once so detectors don't redo the work.
+function collectPathIndices(snap: AnalysisSnapshot): {
+  allPaths: Set<string>;
+  allTests: Set<string>;
+  codeFileCount: number;
+} {
+  const allPaths = new Set<string>();
+  snap.hotspots.forEach((h) => allPaths.add(h.path));
+  snap.fileGraph?.nodes.forEach((n) => allPaths.add(n.path));
+  const allTests = new Set<string>();
+  let codeFileCount = 0;
+  for (const p of allPaths) {
+    if (isTestFile(p)) allTests.add(p);
+    else if (isCodeFile(p)) codeFileCount++;
+  }
+  return { allPaths, allTests, codeFileCount };
 }
 
 // 5. Cross-boundary coupling — files from different top-level folders that
@@ -435,17 +521,16 @@ function detectSoloProject(snap: AnalysisSnapshot): HealthSignal[] {
   ];
 }
 
-// 9. Missing open-source hygiene (license/README) — question
+// 9. Missing open-source hygiene (license/README) — question.
+// README check uses the snapshot's `hasReadme` flag, populated from GitHub's
+// dedicated /readme endpoint during analysis. Path-scanning was unreliable
+// because README files often don't appear in hotspots or the file-graph.
+// On pre-v0.6 snapshots without the flag, skip the README check entirely
+// rather than falsely accuse mature repos.
 function detectMissingHygiene(snap: AnalysisSnapshot): HealthSignal[] {
-  const allPaths = new Set<string>();
-  snap.hotspots.forEach((h) => allPaths.add(h.path.toLowerCase()));
-  snap.fileGraph?.nodes.forEach((n) => allPaths.add(n.path.toLowerCase()));
   const missing: string[] = [];
   if (!snap.repo.license) missing.push("LICENSE");
-  const hasReadme = [...allPaths].some((p) =>
-    p.endsWith("readme.md") || p === "readme" || p.endsWith("/readme.md")
-  );
-  if (!hasReadme) missing.push("README");
+  if (snap.hasReadme === false) missing.push("README");
   if (missing.length === 0) return [];
   return [
     {
@@ -478,24 +563,25 @@ function detectCommitCadence(snap: AnalysisSnapshot): HealthSignal[] {
 }
 
 // 11. Positive test coverage — flip of detectUntestedHotspots. If the majority
-// of hot code files have a sibling test, that's worth celebrating.
+// of hot code files have a discoverable test (sibling / import / name match),
+// that's worth celebrating.
 function detectGoodTestPresence(snap: AnalysisSnapshot): HealthSignal[] {
-  const allPaths = new Set<string>();
-  snap.hotspots.forEach((h) => allPaths.add(h.path));
-  snap.fileGraph?.nodes.forEach((n) => allPaths.add(n.path));
+  const { allPaths, allTests } = collectPathIndices(snap);
 
   const codeHotspots = snap.hotspots
     .slice(0, 25)
     .filter((h) => isCodeFile(h.path));
   if (codeHotspots.length < 5) return [];
-  const tested = codeHotspots.filter((h) => hasTestCoverage(h, allPaths));
+  const tested = codeHotspots.filter((h) =>
+    hasTestCoverage(h, allPaths, allTests, snap.fileGraph)
+  );
   const pct = Math.round((tested.length / codeHotspots.length) * 100);
   if (pct < 60) return [];
   return [
     {
       id: "good-test-presence",
       title: "Tests alongside hot code",
-      detail: `${pct}% of the top-churn code files have a sibling test — regressions should be caught early.`,
+      detail: `${pct}% of the top-churn code files have a discoverable test — regressions should be caught early.`,
       evidence: {
         numbers: { pctTested: pct, sampled: codeHotspots.length },
       },

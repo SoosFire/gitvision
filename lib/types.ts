@@ -189,6 +189,9 @@ export interface AnalysisSnapshot {
     elapsedMs?: number;
     truncated?: string;
   };
+  // Definitive README presence — from GitHub's /readme endpoint, not a path
+  // heuristic. Absent on pre-v0.6 snapshots.
+  hasReadme?: boolean;
   rateLimitInfo?: {
     limit: number;
     remaining: number;
