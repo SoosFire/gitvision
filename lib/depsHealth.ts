@@ -21,8 +21,9 @@ import type {
 // ------------------- Version parsing -------------------
 
 /** Strip semver range prefixes (^, ~, >=, etc.) and pick the first version
- *  in a multi-range string. Returns null if not a concrete version. */
-function normalizeVersion(v: string): string | null {
+ *  in a multi-range string. Returns null if not a concrete version.
+ *  Exported for unit tests. */
+export function normalizeVersion(v: string): string | null {
   const cleaned = v.trim().replace(/^[\^~>=<\s]+/, "");
   // Skip things like "*", "latest", "next", URLs, file:, workspace:, github:
   if (!cleaned) return null;

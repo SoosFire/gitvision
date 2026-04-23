@@ -118,6 +118,10 @@ const CODE_EXTS = new Set([
 // Folders that are typically generated / are output of some upstream source.
 // When cross-boundary coupling includes one of these, the pair is expected
 // (source writes to output), not a red flag for leaking boundaries.
+//
+// Note: we deliberately DON'T include "lib" — it's source code in most
+// projects (our own repo, express, every Node lib). Publishable-npm repos
+// that use lib/ as dist would need a dedicated heuristic.
 const OUTPUT_LIKE_FOLDERS = new Set<string>([
   "docs",
   "dist",
@@ -131,7 +135,6 @@ const OUTPUT_LIKE_FOLDERS = new Set<string>([
   "generated",
   "gen",
   "compiled",
-  "lib",
   "bin",
   "data",
   "snapshots",
