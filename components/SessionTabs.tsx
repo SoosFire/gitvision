@@ -6,19 +6,34 @@ import { TOK } from "@/lib/theme";
 import { Constellation } from "./views/Constellation";
 import { DependencyCanvas } from "./views/DependencyCanvas";
 import { PRFlow } from "./views/PRFlow";
+import { PackagesPanel } from "./views/PackagesPanel";
 import { HotspotTreemap } from "./views/HotspotTreemap";
 import { ContributorList } from "./views/ContributorList";
 import { LanguageBar } from "./views/LanguageBar";
 import { BusFactorPanel } from "./views/BusFactorPanel";
 import { CommitActivity } from "./views/CommitActivity";
 
-type TabName = "canvas" | "dependencies" | "prs" | "overview";
+type TabName = "canvas" | "dependencies" | "packages" | "prs" | "overview";
 
 export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
   const [tab, setTab] = useState<TabName>("canvas");
   const hasGraph = !!snap.fileGraph;
   const prCount = snap.pullRequests?.length ?? 0;
   const depCount = snap.fileGraph?.nodes.length ?? 0;
+
+  // Package-dependency count across ecosystems — shown on the "Packages"
+  // tab. Uses the sum of unique packages (monorepo-aware).
+  const healths =
+    snap.dependencyHealths ??
+    (snap.dependencyHealth ? [snap.dependencyHealth] : []);
+  const packageCount = healths.reduce(
+    (s, h) => s + (h.uniquePackages ?? h.total),
+    0
+  );
+  const packageIssues = healths.reduce(
+    (s, h) => s + h.vulnerable.length + h.deprecated.length,
+    0
+  );
 
   return (
     <div className="flex flex-col gap-4 w-full">
@@ -33,11 +48,18 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
           onClick={() => setTab("canvas")}
         />
         <Tab
-          label="Dependencies"
+          label="Imports"
           count={hasGraph ? depCount : undefined}
           hint={hasGraph ? undefined : "refresh"}
           active={tab === "dependencies"}
           onClick={() => setTab("dependencies")}
+        />
+        <Tab
+          label="Packages"
+          count={packageCount > 0 ? packageCount : undefined}
+          hasIssueBadge={packageIssues > 0}
+          active={tab === "packages"}
+          onClick={() => setTab("packages")}
         />
         <Tab
           label="PRs"
@@ -86,6 +108,12 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
         </div>
       )}
 
+      {tab === "packages" && (
+        <div className="flex flex-col gap-4">
+          <PackagesPanel snapshot={snap} />
+        </div>
+      )}
+
       {tab === "prs" && (
         <div className="flex flex-col gap-4">
           <PRFlow prs={snap.pullRequests ?? []} />
@@ -113,12 +141,14 @@ function Tab({
   label,
   count,
   hint,
+  hasIssueBadge,
   active,
   onClick,
 }: {
   label: string;
   count?: number;
   hint?: string;
+  hasIssueBadge?: boolean;
   active: boolean;
   onClick: () => void;
 }) {
@@ -127,7 +157,7 @@ function Tab({
       role="tab"
       aria-selected={active}
       onClick={onClick}
-      className="h-10 px-3 text-sm font-medium flex items-center gap-1.5 transition"
+      className="h-10 px-3 text-sm font-medium flex items-center gap-1.5 transition relative"
       style={{
         color: active ? TOK.textPrimary : TOK.textSecondary,
         borderBottom: active ? `2px solid ${TOK.accent}` : "2px solid transparent",
@@ -145,6 +175,13 @@ function Tab({
         >
           {count}
         </span>
+      )}
+      {hasIssueBadge && (
+        <span
+          className="h-1.5 w-1.5 rounded-full"
+          style={{ background: TOK.rose }}
+          title="Issues found in packages"
+        />
       )}
       {hint && (
         <span

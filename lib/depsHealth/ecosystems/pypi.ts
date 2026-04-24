@@ -204,8 +204,13 @@ async function fetchPyPiMeta(
 
     const latest: string | null = data.info?.version ?? null;
     // releases is an object keyed by version → array of file uploads.
-    // upload_time on the first file is good enough for release dating.
-    const releases: Record<string, { upload_time?: string }[]> = data.releases ?? {};
+    // Each file has upload_time and optional yanked flag.
+    interface ReleaseFile {
+      upload_time?: string;
+      yanked?: boolean;
+      yanked_reason?: string;
+    }
+    const releases: Record<string, ReleaseFile[]> = data.releases ?? {};
     const timeOfCurrent = releases[current]?.[0]?.upload_time ?? null;
     const timeOfLatest = latest ? releases[latest]?.[0]?.upload_time ?? null : null;
 
@@ -214,9 +219,7 @@ async function fetchPyPiMeta(
     const currentFiles = releases[current] ?? [];
     const allYanked =
       currentFiles.length > 0 &&
-      currentFiles.every(
-        (f: { yanked?: boolean; yanked_reason?: string }) => f.yanked === true
-      );
+      currentFiles.every((f) => f.yanked === true);
     const deprecated = allYanked
       ? `Version ${current} was yanked from PyPI`
       : null;
