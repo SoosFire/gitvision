@@ -100,3 +100,16 @@ The project runs identically on macOS and Windows. Uses cross-platform npm scrip
 ## See [PROGRESS.md](./PROGRESS.md)
 
 Full recap of what's been built, design decisions, known trade-offs, and the next-steps idea list.
+
+## License
+
+GitVision is licensed under the **PolyForm Noncommercial License 1.0.0** — see [LICENSE](./LICENSE).
+
+In short:
+
+- **Yes** to personal use, learning, experimentation, hobby projects, academic research, teaching, nonprofit organizations.
+- **No** to using this code (or derivatives of it) in a commercial product or for-profit service without a separate commercial license.
+
+If you want to use GitVision commercially, [open an issue](https://github.com/SoosFire/gitvision/issues) or get in touch.
+
+Copyright © 2026 Jonas Hansen.
