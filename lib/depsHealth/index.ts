@@ -25,8 +25,9 @@ import type { EcosystemPlugin, DeclaredPackage } from "./types";
 
 // Ecosystem plugins — add new ones here and nothing else changes.
 import { npmPlugin } from "./ecosystems/npm";
+import { cargoPlugin } from "./ecosystems/cargo";
 
-const PLUGINS: EcosystemPlugin[] = [npmPlugin];
+const PLUGINS: EcosystemPlugin[] = [npmPlugin, cargoPlugin];
 
 const MAX_MANIFEST_FILES = 50; // per ecosystem
 const MAX_UNIQUE_PACKAGES = 300; // per ecosystem (registry + OSV budget)

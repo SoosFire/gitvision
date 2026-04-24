@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",
+    "@iarna/toml": "^2.2.5",
     "@types/d3-sankey": "^0.12.5",
     "@xyflow/react": "^12.10.2",
     "d3": "^7.9.0",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/d3": "^7.4.3",
+    "@types/iarna__toml": "^2.0.5",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
