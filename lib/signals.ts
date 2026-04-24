@@ -14,7 +14,51 @@ import type {
   HealthSignals,
   FileHotspot,
   FileGraph,
+  DependencyHealth,
+  OutdatedDep,
+  VulnerableDep,
+  DeprecatedDep,
 } from "./types";
+
+/** Aggregate dependency-health across all ecosystems present on a snapshot.
+ *  Handles the pre-v0.9 singular shape AND the new array shape so old and
+ *  new snapshots both produce correct signals without migration. */
+function getDependencyHealths(snap: AnalysisSnapshot): DependencyHealth[] {
+  if (snap.dependencyHealths && snap.dependencyHealths.length > 0) {
+    return snap.dependencyHealths;
+  }
+  if (snap.dependencyHealth) return [snap.dependencyHealth];
+  return [];
+}
+
+/** Flatten a per-issue array across ecosystems, tagging each with its source
+ *  ecosystem so signal prose can say "22 npm, 3 cargo". */
+interface TaggedDep<T> {
+  ecosystem: string;
+  dep: T;
+}
+function collectAcrossEcosystems<T>(
+  healths: DependencyHealth[],
+  picker: (h: DependencyHealth) => T[]
+): TaggedDep<T>[] {
+  const out: TaggedDep<T>[] = [];
+  for (const h of healths) {
+    for (const dep of picker(h)) {
+      out.push({ ecosystem: h.ecosystem, dep });
+    }
+  }
+  return out;
+}
+
+/** "22 npm, 3 cargo, 5 pypi" — for signal detail prose. */
+function summarizeByEcosystem<T>(tagged: TaggedDep<T>[]): string {
+  const counts = new Map<string, number>();
+  for (const t of tagged) counts.set(t.ecosystem, (counts.get(t.ecosystem) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([eco, n]) => `${n} ${eco}`)
+    .join(", ");
+}
 
 // ------------------- Bot detection -------------------
 // PR cycle-time and throughput should reflect *human* workflow, not bot churn.
@@ -612,50 +656,68 @@ function detectRealCodeActivity(snap: AnalysisSnapshot): HealthSignal[] {
   ];
 }
 
-// 13. Vulnerable dependencies — high severity flag (CVE data from OSV.dev)
+// 13. Vulnerable dependencies — high severity. Aggregates across all
+// ecosystems so a polyglot repo shows one signal: "30 vulnerable (22 npm, 3 cargo, 5 pypi)".
 function detectVulnerableDeps(snap: AnalysisSnapshot): HealthSignal[] {
-  const h = snap.dependencyHealth;
-  if (!h || h.vulnerable.length === 0) return [];
-  const totalCves = h.vulnerable.reduce((s, d) => s + d.cves.length, 0);
-  const topPackages = h.vulnerable
+  const healths = getDependencyHealths(snap);
+  const vulns = collectAcrossEcosystems(healths, (h) => h.vulnerable);
+  if (vulns.length === 0) return [];
+
+  const totalCves = vulns.reduce((s, t) => s + t.dep.cves.length, 0);
+  const ecoBreakdown = summarizeByEcosystem(vulns);
+  const topPackages = vulns
     .slice(0, 3)
-    .map((d) => `${d.name}@${d.current}`);
+    .map((t) => `[${t.ecosystem}] ${t.dep.name}@${t.dep.current}`);
+
   return [
     {
       id: "vulnerable-deps",
-      title: `${h.vulnerable.length} vulnerable dependenc${h.vulnerable.length === 1 ? "y" : "ies"}`,
-      detail: `${totalCves} known CVE${totalCves === 1 ? "" : "s"} across the dependency tree — ${topPackages.join(", ")}${h.vulnerable.length > 3 ? ` +${h.vulnerable.length - 3} more` : ""}.`,
+      title: `${vulns.length} vulnerable dependenc${vulns.length === 1 ? "y" : "ies"}`,
+      detail: `${totalCves} known CVE${totalCves === 1 ? "" : "s"} across ${ecoBreakdown}. Top: ${topPackages.join(", ")}${vulns.length > 3 ? ` +${vulns.length - 3} more` : ""}.`,
       evidence: {
-        paths: h.vulnerable
+        paths: vulns
           .slice(0, 5)
-          .map((d) => `${d.name}@${d.current} · ${d.cves.slice(0, 2).join(", ")}`),
-        numbers: { packages: h.vulnerable.length, cves: totalCves },
+          .map(
+            (t) =>
+              `[${t.ecosystem}] ${t.dep.name}@${t.dep.current} · ${t.dep.cves.slice(0, 2).join(", ")}`
+          ),
+        numbers: { packages: vulns.length, cves: totalCves },
       },
       severity: "high",
     },
   ];
 }
 
-// 14. Outdated dependencies — >=1 year behind latest across N+ packages
+// 14. Outdated dependencies — >=1 year behind across any ecosystem.
 function detectOutdatedDeps(snap: AnalysisSnapshot): HealthSignal[] {
-  const h = snap.dependencyHealth;
-  if (!h) return [];
-  const stale = h.outdated.filter((d) => d.ageMonths >= 12);
+  const healths = getDependencyHealths(snap);
+  const outdated = collectAcrossEcosystems(healths, (h) => h.outdated);
+  const stale = outdated.filter((t) => t.dep.ageMonths >= 12);
   if (stale.length < 3) return [];
-  const topThree = stale.slice(0, 3);
+
+  // Sort by age desc for prose lead
+  stale.sort((a, b) => b.dep.ageMonths - a.dep.ageMonths);
+  const topThree = stale
+    .slice(0, 3)
+    .map((t) => `[${t.ecosystem}] ${t.dep.name} (${t.dep.ageMonths}m behind)`);
+  const totalDeps = healths.reduce((s, h) => s + h.total, 0);
+
   return [
     {
       id: "outdated-deps",
       title: `${stale.length} packages ≥ 1 year behind`,
-      detail: `Stalest: ${topThree
-        .map((d) => `${d.name} (${d.ageMonths}m behind)`)
-        .join(", ")}. Upgrade candidates for a debt-reduction sprint.`,
+      detail: `Stalest: ${topThree.join(", ")}. Upgrade candidates for a debt-reduction sprint.`,
       evidence: {
-        paths: stale.slice(0, 5).map((d) => `${d.name}: ${d.current} → ${d.latest}`),
+        paths: stale
+          .slice(0, 5)
+          .map(
+            (t) =>
+              `[${t.ecosystem}] ${t.dep.name}: ${t.dep.current} → ${t.dep.latest}`
+          ),
         numbers: {
           behind: stale.length,
-          totalDeps: h.total,
-          outdatedTotal: h.outdated.length,
+          totalDeps,
+          outdatedTotal: outdated.length,
         },
       },
       severity: stale.length > 10 ? "high" : "medium",
@@ -663,47 +725,66 @@ function detectOutdatedDeps(snap: AnalysisSnapshot): HealthSignal[] {
   ];
 }
 
-// 15. Deprecated dependencies — package explicitly deprecated on npm
+// 15. Deprecated dependencies — explicitly marked as such in a registry.
 function detectDeprecatedDeps(snap: AnalysisSnapshot): HealthSignal[] {
-  const h = snap.dependencyHealth;
-  if (!h || h.deprecated.length === 0) return [];
+  const healths = getDependencyHealths(snap);
+  const deps = collectAcrossEcosystems(healths, (h) => h.deprecated);
+  if (deps.length === 0) return [];
+
+  const names = deps.slice(0, 3).map((t) => `[${t.ecosystem}] ${t.dep.name}`);
   return [
     {
       id: "deprecated-deps",
-      title: `${h.deprecated.length} deprecated dependenc${h.deprecated.length === 1 ? "y" : "ies"}`,
-      detail: `Explicitly deprecated: ${h.deprecated
-        .slice(0, 3)
-        .map((d) => d.name)
-        .join(", ")}${h.deprecated.length > 3 ? ` +${h.deprecated.length - 3}` : ""}. Find maintained alternatives.`,
+      title: `${deps.length} deprecated dependenc${deps.length === 1 ? "y" : "ies"}`,
+      detail: `Explicitly deprecated: ${names.join(", ")}${deps.length > 3 ? ` +${deps.length - 3}` : ""}. Find maintained alternatives.`,
       evidence: {
-        paths: h.deprecated
+        paths: deps
           .slice(0, 5)
-          .map((d) => `${d.name}@${d.current}: ${d.message.slice(0, 80)}`),
-        numbers: { count: h.deprecated.length },
+          .map(
+            (t) =>
+              `[${t.ecosystem}] ${t.dep.name}@${t.dep.current}: ${t.dep.message.slice(0, 80)}`
+          ),
+        numbers: { count: deps.length },
       },
       severity: "medium",
     },
   ];
 }
 
-// 16. Fresh dependencies — counterpart to outdated (positive signal)
+// 16. Fresh dependencies — counterpart to outdated. Must be clean across
+// ALL ecosystems present on the snapshot.
 function detectFreshDeps(snap: AnalysisSnapshot): HealthSignal[] {
-  const h = snap.dependencyHealth;
-  if (!h || h.total < 5) return [];
-  // Don't celebrate fresh deps when there are CVEs or deprecated ones.
-  if (h.vulnerable.length > 0 || h.deprecated.length > 0) return [];
-  const staleCount = h.outdated.filter((d) => d.ageMonths >= 12).length;
-  if (staleCount > 0) return [];
-  const somewhatStale = h.outdated.filter((d) => d.ageMonths >= 6).length;
-  // Must be genuinely fresh — less than 20% of deps even 6 months behind
-  if (somewhatStale > h.total * 0.2) return [];
+  const healths = getDependencyHealths(snap);
+  if (healths.length === 0) return [];
+  const totalDeps = healths.reduce((s, h) => s + h.total, 0);
+  if (totalDeps < 5) return [];
+
+  // Any CVE or deprecated anywhere → not fresh
+  const hasAnyCve = healths.some((h) => h.vulnerable.length > 0);
+  const hasAnyDeprecated = healths.some((h) => h.deprecated.length > 0);
+  if (hasAnyCve || hasAnyDeprecated) return [];
+
+  // Any package ≥12 months behind → not fresh
+  const anyYearBehind = healths.some((h) =>
+    h.outdated.some((d) => d.ageMonths >= 12)
+  );
+  if (anyYearBehind) return [];
+
+  // Less than 20% can be even 6 months behind
+  const somewhatStale = healths.reduce(
+    (s, h) => s + h.outdated.filter((d) => d.ageMonths >= 6).length,
+    0
+  );
+  if (somewhatStale > totalDeps * 0.2) return [];
+
+  const ecoList = healths.map((h) => h.ecosystem).join(", ");
   return [
     {
       id: "fresh-deps",
       title: "Dependencies are fresh",
-      detail: `${h.total} packages analyzed with no known CVEs, no deprecated entries, and nothing more than 12 months behind.`,
+      detail: `${totalDeps} packages analyzed across ${ecoList} — no known CVEs, no deprecated entries, nothing more than 12 months behind.`,
       evidence: {
-        numbers: { total: h.total, somewhatStale },
+        numbers: { total: totalDeps, somewhatStale, ecosystems: healths.length },
       },
     },
   ];

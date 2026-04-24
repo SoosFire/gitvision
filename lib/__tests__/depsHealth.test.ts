@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { normalizeVersion } from "../depsHealth";
+import { normalizeNpmVersion as normalizeVersion } from "../depsHealth/ecosystems/npm";
 
-describe("normalizeVersion", () => {
+describe("npm normalizeVersion", () => {
   it("strips caret prefix", () => {
     expect(normalizeVersion("^1.2.3")).toBe("1.2.3");
   });

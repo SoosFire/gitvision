@@ -15,7 +15,7 @@ import type {
 } from "./types";
 import { buildFileGraph } from "./graph";
 import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
-import { analyzeDependencyHealth } from "./depsHealth";
+import { analyzeDependencyHealth } from "./depsHealth/index";
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN || undefined,
@@ -355,7 +355,7 @@ export async function analyzeRepo(
     pullRequests,
     history,
     hasReadme,
-    dependencyHealth,
+    dependencyHealths,
   ] = await Promise.all([
     fetchRepoMeta(owner, repo),
     fetchContributors(owner, repo),
@@ -466,7 +466,7 @@ export async function analyzeRepo(
     commitIndex,
     historySource,
     hasReadme,
-    dependencyHealth: dependencyHealth ?? undefined,
+    dependencyHealths: dependencyHealths.length > 0 ? dependencyHealths : undefined,
     rateLimitInfo,
   };
 }

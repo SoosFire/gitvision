@@ -141,11 +141,16 @@ export interface DeprecatedDep {
   message: string;
   sources?: string[];
 }
+/** Ecosystem identifier. Loose union — new plugins can add values without
+ *  touching this file. Existing consumers should treat unknown values as
+ *  opaque strings (useful in UI fallbacks). */
+export type Ecosystem = "npm" | "cargo" | "pypi" | (string & {});
+
 export interface DependencyHealth {
-  ecosystem: "npm";
-  total: number; // total declarations across all package.json files
+  ecosystem: Ecosystem;
+  total: number; // total declarations across all manifest files
   uniquePackages?: number; // distinct (name, version) pairs analyzed
-  packageFiles?: number; // number of package.json files read (monorepo-aware)
+  packageFiles?: number; // number of manifest files read (monorepo-aware)
   outdated: OutdatedDep[];
   vulnerable: VulnerableDep[];
   deprecated: DeprecatedDep[];
@@ -227,8 +232,12 @@ export interface AnalysisSnapshot {
   // Definitive README presence — from GitHub's /readme endpoint, not a path
   // heuristic. Absent on pre-v0.6 snapshots.
   hasReadme?: boolean;
-  // Dependency-health analysis (npm). Absent on older snapshots or repos
-  // without a root package.json.
+  // Dependency-health analysis across all detected ecosystems (npm, cargo,
+  // pypi, ...). Empty array if no manifests found. One entry per ecosystem
+  // that had at least one manifest in the repo.
+  dependencyHealths?: DependencyHealth[];
+  // DEPRECATED: pre-v0.9 snapshots stored a single npm-only DependencyHealth
+  // here. Read-side helpers (getDependencyHealths) normalize both shapes.
   dependencyHealth?: DependencyHealth;
   rateLimitInfo?: {
     limit: number;
