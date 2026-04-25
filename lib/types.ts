@@ -1,5 +1,7 @@
 // Shared types for GitVision
 
+import type { CodeGraph } from "./codeAnalysis/types";
+
 export interface RepoMeta {
   owner: string;
   name: string;
@@ -69,6 +71,10 @@ export interface PullRequestSummary {
 export interface LanguageBreakdown {
   [language: string]: number; // bytes
 }
+
+// Re-export CodeGraph so callers can access it from this single types.ts
+// entry point alongside the other snapshot field types.
+export type { CodeGraph } from "./codeAnalysis/types";
 
 // File-dependency graph (imports + framework-specific edges).
 // Computed from the repo tarball — see lib/graph.ts.
@@ -239,6 +245,12 @@ export interface AnalysisSnapshot {
   // DEPRECATED: pre-v0.9 snapshots stored a single npm-only DependencyHealth
   // here. Read-side helpers (getDependencyHealths) normalize both shapes.
   dependencyHealth?: DependencyHealth;
+  // AST-based code analysis (v0.10). JS/TS via tree-sitter, other 7 languages
+  // via the regex-fallback wrapper. Functions, calls, complexity are JS/TS-
+  // only as of v0.10; imports cover all 8 languages. Optional — pre-v0.10
+  // snapshots simply omit this field. The Imports tab continues to read
+  // `fileGraph` as before, so old sessions render unchanged.
+  codeGraph?: CodeGraph;
   rateLimitInfo?: {
     limit: number;
     remaining: number;

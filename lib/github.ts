@@ -13,9 +13,16 @@ import type {
   CommitIndexEntry,
   PullRequestSummary,
 } from "./types";
-import { buildFileGraph } from "./graph";
+import {
+  buildFileGraph,
+  buildFileGraphFromDir,
+  downloadAndExtract,
+} from "./graph";
 import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
 import { analyzeDependencyHealth } from "./depsHealth/index";
+import { analyzeDirectory } from "./codeAnalysis/analyze";
+import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
+import { regexFallbackPlugin } from "./codeAnalysis/plugins/regexFallback";
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN || undefined,
@@ -431,13 +438,46 @@ export async function analyzeRepo(
     : recentCommits;
   const commitActivity = computeCommitActivity(activitySource);
 
-  // Dependency graph — tarball-based. Failures are captured inline (truncated field).
-  const fileGraph = await buildFileGraph(
-    octokit,
-    owner,
-    repo,
-    repoMeta.defaultBranch
-  );
+  // Dependency graph + code-analysis CodeGraph — both tarball-based. Run them
+  // off a single shared tarball-extract (instead of having each pipeline
+  // download separately) and run in parallel via Promise.all. Failures in
+  // either fall back gracefully: buildFileGraphFromDir returns an empty
+  // graph with a truncated reason; analyzeDirectory's failures surface as
+  // individual parseError flags rather than blowing up the whole snapshot.
+  let fileGraph;
+  let codeGraph;
+  let cleanup: (() => Promise<void>) | null = null;
+  try {
+    const extracted = await downloadAndExtract(
+      octokit,
+      owner,
+      repo,
+      repoMeta.defaultBranch
+    );
+    cleanup = extracted.cleanup;
+    const [fg, cg] = await Promise.all([
+      buildFileGraphFromDir(extracted.extractDir),
+      analyzeDirectory(extracted.extractDir, [
+        javascriptPlugin,
+        regexFallbackPlugin,
+      ]).then((r) => r.codeGraph),
+    ]);
+    fileGraph = fg;
+    codeGraph = cg;
+  } catch (err) {
+    // Tarball download itself failed — fall back to the public buildFileGraph
+    // which has its own download + cleanup, and skip codeGraph for this run.
+    fileGraph = await buildFileGraph(
+      octokit,
+      owner,
+      repo,
+      repoMeta.defaultBranch
+    );
+    codeGraph = undefined;
+    void err;
+  } finally {
+    if (cleanup) await cleanup();
+  }
 
   // Rate limit snapshot (useful for UI)
   let rateLimitInfo: AnalysisSnapshot["rateLimitInfo"];
@@ -462,6 +502,7 @@ export async function analyzeRepo(
     coChange,
     commitActivity,
     fileGraph,
+    codeGraph,
     pullRequests,
     commitIndex,
     historySource,

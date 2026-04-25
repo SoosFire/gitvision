@@ -974,7 +974,23 @@ export async function buildFileGraph(
   try {
     const extracted = await downloadAndExtract(octokit, owner, repo, defaultBranch);
     cleanup = extracted.cleanup;
-    const records = await readCodeFiles(extracted.extractDir);
+    return await buildFileGraphFromDir(extracted.extractDir);
+  } catch (err) {
+    return emptyFileGraph(err instanceof Error ? err.message : "Unknown error");
+  } finally {
+    if (cleanup) await cleanup();
+  }
+}
+
+/** Build a FileGraph from an already-extracted source tree on disk. Used by
+ *  callers that share one tarball-extract across multiple analyses (the
+ *  analyzeRepo pipeline runs this AND codeAnalysis.analyzeDirectory against
+ *  the same extractDir, parallel via Promise.all). */
+export async function buildFileGraphFromDir(
+  extractDir: string
+): Promise<FileGraph> {
+  try {
+    const records = await readCodeFiles(extractDir);
 
     const truncated =
       records.length >= MAX_TOTAL_FILES
@@ -1023,20 +1039,22 @@ export async function buildFileGraph(
       truncated,
     };
   } catch (err) {
-    return {
-      nodes: [],
-      edges: [],
-      stats: {
-        totalFiles: 0,
-        filesByLanguage: {},
-        edgesByKind: {},
-        skipped: 0,
-      },
-      truncated: err instanceof Error ? err.message : "Unknown error",
-    };
-  } finally {
-    if (cleanup) await cleanup();
+    return emptyFileGraph(err instanceof Error ? err.message : "Unknown error");
   }
+}
+
+function emptyFileGraph(reason: string): FileGraph {
+  return {
+    nodes: [],
+    edges: [],
+    stats: {
+      totalFiles: 0,
+      filesByLanguage: {},
+      edgesByKind: {},
+      skipped: 0,
+    },
+    truncated: reason,
+  };
 }
 
 // ------------------- In-memory entry point for codeAnalysis -------------------
