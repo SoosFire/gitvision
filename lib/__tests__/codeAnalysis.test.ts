@@ -11,6 +11,10 @@ import { Parser } from "web-tree-sitter";
 import { ensureRuntime, loadBuiltinGrammar } from "../codeAnalysis/runtime";
 import { javascriptPlugin } from "../codeAnalysis/plugins/javascript";
 import { parseFile } from "../codeAnalysis/parse";
+import {
+  looksVendoredByPath,
+  looksMinifiedByContent,
+} from "../codeAnalysis/analyze";
 import type { FileIndex, SourceFile } from "../codeAnalysis/types";
 
 // Shared helper — build a FileIndex from a list of SourceFiles. Optional
@@ -225,27 +229,28 @@ describe("javascriptPlugin.resolveImport — tsconfig path mappings", () => {
     { rel: "shared/logger.ts", ext: "ts", content: "" },
   ];
 
+  /** Helper: build extras with just a tsconfig (no workspaces). */
+  function tsExtras(
+    mappings: { baseUrl: string; paths: Record<string, string[]> }
+  ): Map<string, unknown> {
+    return new Map([["javascript", { tsPathMappings: mappings }]]);
+  }
+
   it("resolves @/lib/types via tsconfig paths {@/* → src/*}", () => {
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        { baseUrl: "", paths: { "@/*": ["src/*"] } },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({ baseUrl: "", paths: { "@/*": ["src/*"] } })
+    );
     expect(
       javascriptPlugin.resolveImport("@/lib/types", "anywhere.ts", ix)
     ).toBe("src/lib/types.ts");
   });
 
   it("resolves ~/* aliased to a different prefix", () => {
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        { baseUrl: "", paths: { "~/*": ["shared/*"] } },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({ baseUrl: "", paths: { "~/*": ["shared/*"] } })
+    );
     expect(
       javascriptPlugin.resolveImport("~/logger", "anywhere.ts", ix)
     ).toBe("shared/logger.ts");
@@ -253,44 +258,33 @@ describe("javascriptPlugin.resolveImport — tsconfig path mappings", () => {
 
   it("respects baseUrl when joining substitutions", () => {
     // baseUrl: "src" + paths { "@/*": ["./*"] } means "@/lib/types" → src/lib/types
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        { baseUrl: "src", paths: { "@/*": ["./*"] } },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({ baseUrl: "src", paths: { "@/*": ["./*"] } })
+    );
     expect(
       javascriptPlugin.resolveImport("@/lib/types", "src/x.ts", ix)
     ).toBe("src/lib/types.ts");
   });
 
   it("supports multiple substitutions, returning the first that hits a real file", () => {
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        {
-          baseUrl: "",
-          paths: {
-            "@app/*": ["nonexistent/*", "src/components/*"],
-          },
-        },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({
+        baseUrl: "",
+        paths: { "@app/*": ["nonexistent/*", "src/components/*"] },
+      })
+    );
     expect(
       javascriptPlugin.resolveImport("@app/Button", "anywhere.ts", ix)
     ).toBe("src/components/Button.tsx");
   });
 
   it("falls back to relative resolution when no path mapping matches", () => {
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        { baseUrl: "", paths: { "@/*": ["src/*"] } },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({ baseUrl: "", paths: { "@/*": ["src/*"] } })
+    );
     // Spec doesn't match @/* — should resolve relative as before
     expect(
       javascriptPlugin.resolveImport(
@@ -302,16 +296,135 @@ describe("javascriptPlugin.resolveImport — tsconfig path mappings", () => {
   });
 
   it("returns null when path mapping points at nothing real", () => {
-    const extras = new Map<string, unknown>([
-      [
-        "javascript",
-        { baseUrl: "", paths: { "@/*": ["src/*"] } },
-      ],
-    ]);
-    const ix = makeIndex(files, extras);
+    const ix = makeIndex(
+      files,
+      tsExtras({ baseUrl: "", paths: { "@/*": ["src/*"] } })
+    );
     expect(
       javascriptPlugin.resolveImport("@/does/not/exist", "x.ts", ix)
     ).toBeNull();
+  });
+});
+
+describe("javascriptPlugin.resolveImport — empty / dot paths to repo root", () => {
+  // express's examples directory does `import "../.."` from
+  // examples/auth/index.js, expecting it to find the root index.js.
+  // Before the fix this normalized to "" or "." and returned null.
+  const files: SourceFile[] = [
+    { rel: "index.js", ext: "js", content: "" },
+    { rel: "examples/auth/index.js", ext: "js", content: "" },
+  ];
+  const ix = makeIndex(files);
+
+  it("`../..` from examples/auth/index.js resolves to root index.js", () => {
+    expect(
+      javascriptPlugin.resolveImport("../..", "examples/auth/index.js", ix)
+    ).toBe("index.js");
+  });
+
+  it("`../../` (trailing slash) from same place also resolves", () => {
+    expect(
+      javascriptPlugin.resolveImport("../../", "examples/auth/index.js", ix)
+    ).toBe("index.js");
+  });
+});
+
+describe("javascriptPlugin.resolveImport — workspace packages", () => {
+  // Synthetic monorepo with two packages
+  const files: SourceFile[] = [
+    {
+      rel: "packages/core/src/index.ts",
+      ext: "ts",
+      content: "",
+    },
+    {
+      rel: "packages/core/src/utils.ts",
+      ext: "ts",
+      content: "",
+    },
+    {
+      rel: "packages/ui/src/index.ts",
+      ext: "ts",
+      content: "",
+    },
+    { rel: "apps/web/src/main.ts", ext: "ts", content: "" },
+  ];
+
+  function workspaceExtras(): Map<string, unknown> {
+    const workspaces = new Map([
+      [
+        "@acme/core",
+        {
+          name: "@acme/core",
+          packageDir: "packages/core",
+          sourcePath: "packages/core/src/index.ts",
+        },
+      ],
+      [
+        "@acme/ui",
+        {
+          name: "@acme/ui",
+          packageDir: "packages/ui",
+          sourcePath: "packages/ui/src/index.ts",
+        },
+      ],
+    ]);
+    return new Map([["javascript", { workspaces }]]);
+  }
+
+  it("resolves a bare workspace package name to its source entry", () => {
+    const ix = makeIndex(files, workspaceExtras());
+    expect(
+      javascriptPlugin.resolveImport("@acme/core", "apps/web/src/main.ts", ix)
+    ).toBe("packages/core/src/index.ts");
+  });
+
+  it("resolves a workspace subpath (treats packages/core/utils as the file)", () => {
+    const ix = makeIndex(files, workspaceExtras());
+    // @acme/core/utils — try packageDir/utils first, then packageDir/src/utils
+    expect(
+      javascriptPlugin.resolveImport(
+        "@acme/core/utils",
+        "apps/web/src/main.ts",
+        ix
+      )
+    ).toBe("packages/core/src/utils.ts");
+  });
+
+  it("returns null for a non-workspace external package", () => {
+    const ix = makeIndex(files, workspaceExtras());
+    expect(
+      javascriptPlugin.resolveImport("react", "apps/web/src/main.ts", ix)
+    ).toBeNull();
+  });
+
+  it("tsconfig path mapping wins over workspaces when both are configured", () => {
+    // Belt-and-braces: a repo declares both. tsconfig has a more specific
+    // alias for @acme/core that points elsewhere — should be honored first.
+    const extraFiles: SourceFile[] = [
+      ...files,
+      { rel: "internal/core-shim.ts", ext: "ts", content: "" },
+    ];
+    const ws = workspaceExtras();
+    const ctx = ws.get("javascript") as {
+      workspaces: Map<string, { sourcePath: string }>;
+    };
+    const merged = new Map<string, unknown>([
+      [
+        "javascript",
+        {
+          tsPathMappings: {
+            baseUrl: "",
+            paths: { "@acme/core": ["internal/core-shim.ts"] },
+          },
+          workspaces: ctx.workspaces,
+        },
+      ],
+    ]);
+    const ix = makeIndex(extraFiles, merged);
+    expect(
+      javascriptPlugin.resolveImport("@acme/core", "apps/web/src/main.ts", ix)
+    ).toBe("internal/core-shim.ts");
   });
 });
 
@@ -479,5 +592,64 @@ describe("parseFile — JavaScript extraction", () => {
     // We still return a ParsedFile; tree-sitter is error-tolerant, so
     // parseError stays false for partial parses. What matters is no throw.
     expect(parsed.rel).toBe("src/broken.js");
+  });
+});
+
+describe("vendored/minified file filter", () => {
+  describe("looksVendoredByPath", () => {
+    it("rejects test fixture/asset paths", () => {
+      expect(looksVendoredByPath("tests/assets/react/react-dom.js")).toBe(true);
+      expect(looksVendoredByPath("test/fixtures/lodash.js")).toBe(true);
+      expect(looksVendoredByPath("packages/foo/tests/assets/vue.js")).toBe(
+        true
+      );
+    });
+
+    it("rejects vendor / third-party directories", () => {
+      expect(looksVendoredByPath("vendor/jquery.js")).toBe(true);
+      expect(looksVendoredByPath("packages/x/vendored/preact.js")).toBe(true);
+      expect(looksVendoredByPath("third_party/codemirror.js")).toBe(true);
+      expect(looksVendoredByPath("third-party/parser.js")).toBe(true);
+    });
+
+    it("rejects .min.js / .bundle.js outputs", () => {
+      expect(looksVendoredByPath("dist/app.min.js")).toBe(true);
+      expect(looksVendoredByPath("public/lib.bundle.js")).toBe(true);
+      expect(looksVendoredByPath("packages/ui/main-bundle.mjs")).toBe(true);
+    });
+
+    it("accepts ordinary source files", () => {
+      expect(looksVendoredByPath("src/index.ts")).toBe(false);
+      expect(looksVendoredByPath("packages/core/src/util.ts")).toBe(false);
+      expect(looksVendoredByPath("test/utils.ts")).toBe(false); // /test/, not /tests/assets/
+      expect(looksVendoredByPath("__tests__/foo.test.ts")).toBe(false);
+    });
+  });
+
+  describe("looksMinifiedByContent", () => {
+    it("accepts normal-sized source", () => {
+      const src =
+        "import { foo } from './bar';\n".repeat(200) +
+        "function hi() { return 42; }";
+      expect(looksMinifiedByContent(src)).toBe(false);
+    });
+
+    it("accepts large but well-formatted files", () => {
+      // 60KB of normal code with average ~50 chars per line
+      const src = ("function f() { return 1; }\n".repeat(2200));
+      expect(src.length).toBeGreaterThan(50_000);
+      expect(looksMinifiedByContent(src)).toBe(false);
+    });
+
+    it("rejects huge single-line content (classic minified bundle)", () => {
+      const minified = "!function(e){var t={};".repeat(5_000); // ~110KB, no newlines
+      expect(looksMinifiedByContent(minified)).toBe(true);
+    });
+
+    it("rejects content where avg line length is enormous", () => {
+      // 60KB total, two huge lines averaging 30KB each
+      const huge = "x".repeat(30_000) + "\n" + "y".repeat(30_000);
+      expect(looksMinifiedByContent(huge)).toBe(true);
+    });
   });
 });

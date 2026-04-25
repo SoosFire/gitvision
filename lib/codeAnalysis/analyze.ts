@@ -195,11 +195,17 @@ async function walkAndRead(
       } else if (e.isFile()) {
         const ext = path.extname(e.name).slice(1).toLowerCase();
         if (!pluginByExt.has(ext)) continue;
+        const rel = path.relative(root, full).split(path.sep).join("/");
+        // Path-based pre-filter: cheap, skips before we even open the file
+        if (looksVendoredByPath(rel)) continue;
         try {
           const st = await fs.stat(full);
           if (st.size > MAX_FILE_BYTES) continue;
           const content = await fs.readFile(full, "utf-8");
-          const rel = path.relative(root, full).split(path.sep).join("/");
+          // Content-based filter: catches minified bundles that don't have
+          // a giveaway path. Real source code virtually never has the
+          // average-line-length signatures we look for.
+          if (looksMinifiedByContent(content)) continue;
           out.push({ rel, ext, content });
         } catch {
           continue;
@@ -210,4 +216,30 @@ async function walkAndRead(
 
   await visit(root);
   return { files: out, truncated };
+}
+
+/** Recognize files by path that virtually never represent real first-party
+ *  source: vendored library copies under tests/assets, fixtures, vendor
+ *  directories; explicitly-named .min.js / .bundle.js outputs.
+ *  Exported for unit-testing the heuristic — production callers should
+ *  rely on walkAndRead applying it automatically. */
+export function looksVendoredByPath(rel: string): boolean {
+  if (/(^|\/)tests?\/(assets|fixtures)\//i.test(rel)) return true;
+  if (/(^|\/)(vendor|vendored|third[_-]?party)\//i.test(rel)) return true;
+  if (/\.min\.(js|mjs|cjs)$/i.test(rel)) return true;
+  if (/[-.]bundle\.(js|mjs|cjs)$/i.test(rel)) return true;
+  return false;
+}
+
+/** Heuristic for minified/bundled content. Real source files have lots of
+ *  newlines; minified bundles cram code into one or two enormous lines.
+ *  We sample only the first 10KB so this stays cheap on big files.
+ *  Exported for unit-testing the heuristic. */
+export function looksMinifiedByContent(content: string): boolean {
+  if (content.length < 50_000) return false;
+  const head = content.slice(0, 10_000);
+  const newlines = (head.match(/\n/g) ?? []).length;
+  if (newlines === 0) return true;
+  const avgLineLen = head.length / (newlines + 1);
+  return avgLineLen > 500;
 }
