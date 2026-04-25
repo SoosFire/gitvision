@@ -9,6 +9,7 @@
 import path from "node:path";
 import { analyzeDirectory } from "./analyze";
 import { goPlugin } from "./plugins/go";
+import { javaPlugin } from "./plugins/java";
 import { javascriptPlugin } from "./plugins/javascript";
 import { pythonPlugin } from "./plugins/python";
 import { regexFallbackPlugin } from "./plugins/regexFallback";
@@ -25,6 +26,7 @@ async function main() {
     javascriptPlugin,
     pythonPlugin,
     goPlugin,
+    javaPlugin,
     regexFallbackPlugin,
   ]);
   const { totals, elapsedMs, files, truncated, codeGraph } = result;

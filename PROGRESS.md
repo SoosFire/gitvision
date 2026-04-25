@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.13, end of session 4)
+## Current state (v0.14, end of session 4)
 
 ### What works end-to-end
 
@@ -117,13 +117,18 @@ lib/codeAnalysis/
     │                       imports + functions + calls + complexity.
     ├── python.ts           Tree-sitter (.py) — same coverage. Migrated
     │                       from regex-fallback in v0.12.
-    ├── go.ts               Tree-sitter (.go) — same coverage. Migrated in
-    │                       v0.13. prepareForRepo reads go.mod for
+    ├── go.ts               Tree-sitter (.go) — same coverage. Migrated
+    │                       in v0.13. prepareForRepo reads go.mod for
     │                       module-prefix-aware import resolution.
+    ├── java.ts             Tree-sitter (.java) — same coverage. Migrated
+    │                       in v0.14. prepareForRepo regex-scans every
+    │                       file's `package` declaration to build FQN→path
+    │                       and package→members maps for resolveImport.
+    │                       Captures method + constructor + object_creation.
     └── regexFallback.ts    Wraps lib/graph.ts's per-language regex parsers
-                            (Java, Kotlin, C#, PHP, Ruby + HTML/CSS as
-                            passive). Imports-only — no functions/calls/
-                            complexity from regex.
+                            (Kotlin, C#, PHP, Ruby + HTML/CSS as passive).
+                            Imports-only — no functions/calls/complexity
+                            from regex.
 ```
 
 **Two execution paths in the plugin contract:**
@@ -140,7 +145,8 @@ lib/codeAnalysis/
 | JS / TS / JSX / TSX / MJS / CJS / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ |
 | Python (.py) | `python` (v0.12) | ✅ AST | ✅ | ✅ | ✅ |
 | Go (.go) | `go` (v0.13) | ✅ AST | ✅ | ✅ | ✅ |
-| Java, Kotlin, C#, PHP, Ruby | `regex-fallback` | ✅ regex | — | — | — |
+| Java (.java) | `java` (v0.14) | ✅ AST | ✅ | ✅ | ✅ |
+| Kotlin, C#, PHP, Ruby | `regex-fallback` | ✅ regex | — | — | — |
 
 **Resolver features (the JS/TS plugin):**
 - TS-ESM convention: `./foo.js` spec → `./foo.ts` file (and the .jsx/.mjs/.cjs ↔ .tsx/.mts/.cts pairs).
@@ -286,7 +292,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**213 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.13 added `go.test.ts` (17 tests) covering grammar load, single + grouped imports, blank/aliased imports, prepareForRepo reading `go.mod` (incl. malformed file recovery), prefix-strip vs suffix-match resolution paths, function + method declarations, complexity counting (if/for/switch cases excluding default/&&/||).
+**225 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.14 added `java.test.ts` (12 tests) covering grammar load, prepareForRepo building FQN + package indexes, direct + wildcard + external resolution, default-package handling, method + constructor extraction, generic-type object_creation calls (`new ArrayList<>()`), and the McCabe count on a hand-crafted branchy method.
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -344,15 +350,16 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.11 — Tier 2 complete (Phases 4a-b): `codeGraph` lifted onto `AnalysisSnapshot` via shared tarball-extract with `FileGraph` (Phase 4a). Code tab with Blast Radius UI: heaviest-file default, incoming/outgoing hop lists, twin lists for navigation, honest coverage chip (Phase 4b).
 - ✅ v0.12 — Python migrated to its own tree-sitter plugin. Live impact on django/django: 0 → **31,894 functions, 183,798 calls** with full per-function complexity. Top-complex surfaces real Django hotspots like `_alter_field @ 91` (schema migrations) and `__new__ @ 62` (model metaclass).
 - ✅ v0.13 — Go migrated to its own tree-sitter plugin. `prepareForRepo` reads `go.mod` for module-prefix-aware import resolution, with a suffix-match heuristic as fallback. Live impact across four repos: gin (1,311 fns), cobra (589), testify (1,519), terraform (16,930). Top-complex surfaces gin's radix-tree router internals, cobra's shell completion, testify's `compare`, terraform's `backendFromConfig`.
+- ✅ v0.14 — Java migrated to its own tree-sitter plugin. `prepareForRepo` regex-scans `package` declarations across the FileIndex to build FQN→path + package→members maps; resolver tries direct FQN then falls back to package lookup (which catches wildcard imports). Live impact: spring-petclinic (165 fns), spring-boot (30,116 fns at the 5,000-file cap), guava (56,485), jenkins (19,895). Captures method + constructor invocations + `new Foo<>()` object creation as call sites.
 
 ### Next up: continue Tier 2 polish (when motivated, one file each)
 
-Each remaining language migration follows the exact pattern from v0.12-13
+Each remaining language migration follows the exact pattern from v0.12-14
 — new plugin file, register in three places, shrink regexFallback's
 extension list, ship.
 
-- Migrate Java — biggest remaining impact. Spring projects and Android codebases get full call-graph.
-- Migrate Kotlin, C#, PHP, Ruby — in any order, ~1 evening each.
+- Migrate Kotlin — Java's lillebror; could share JVM-style FQN indexing logic.
+- Migrate C#, PHP, Ruby — in any order, ~1 evening each.
 - Function-level blast radius (today the hero is file-level) — the call-graph is per-function but the UI projects to files. Could add a "click a function chip → blast radius for just that function".
 - AST-based duplicate detection via tree-walking similarity hashes.
 - Test-to-code mapping refinements using the call-graph.
@@ -448,4 +455,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.13 — Go migrated to tree-sitter, second language off regex-fallback. Pattern now validated across two languages with different module systems: Python's relative-import quirks and Go's go.mod-based resolution both fit the same plugin contract).*
+*Last updated: end of session 4 (v0.14 — Java migrated to tree-sitter, third migration. Pattern now validated across four very different module systems: Python's relative dots, Go's go.mod-based prefix, Java's FQN-from-package + wildcards, and JS/TS's tsconfig-paths + workspaces. The plugin contract has held up cleanly throughout.).*

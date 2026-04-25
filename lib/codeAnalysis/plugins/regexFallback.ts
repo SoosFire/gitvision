@@ -31,14 +31,15 @@ const PLUGIN_NAME = "regex-fallback";
 
 /** Languages still handled by the regex parsers in lib/graph.ts. Plus
  *  HTML/CSS as passive file types — we don't extract anything from them, but
- *  the JVM regex parser needs them in the FileIndex to resolve controller →
- *  template "renders" edges (Spring MVC convention).
+ *  the JVM regex parser (well, what's left of it for Kotlin) still needs
+ *  them in the FileIndex to resolve controller → template "renders" edges
+ *  for the Imports tab (Spring MVC convention).
  *
- *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13.
- *  As more languages migrate this list will shrink, and when it's empty
- *  this whole file (plus lib/graph.ts's regex parsers) can be deleted. */
+ *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13,
+ *  Java → tree-sitter in v0.14. As more languages migrate this list will
+ *  shrink, and when it's empty this whole file (plus lib/graph.ts's regex
+ *  parsers) can be deleted. */
 const EXTENSIONS = [
-  "java",
   "kt",
   "cs",
   "php",

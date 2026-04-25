@@ -101,11 +101,11 @@ describe("extractImportsFromSourceFiles", () => {
 });
 
 describe("regexFallbackPlugin", () => {
-  it("advertises the five remaining non-AST languages plus html/css for resolution", () => {
-    // Python migrated in v0.12, Go in v0.13 — both have their own tree-
-    // sitter plugins now. As more languages migrate this list shrinks.
+  it("advertises the four remaining non-AST languages plus html/css for resolution", () => {
+    // Python migrated in v0.12, Go in v0.13, Java in v0.14 — all have their
+    // own tree-sitter plugins. As more languages migrate this list shrinks.
     expect([...regexFallbackPlugin.extensions].sort()).toEqual(
-      ["cs", "css", "html", "java", "kt", "php", "rb"]
+      ["cs", "css", "html", "kt", "php", "rb"]
     );
   });
 
@@ -117,28 +117,30 @@ describe("regexFallbackPlugin", () => {
   });
 
   it("prepareForRepo + parseDirect produces import edges with resolvedPath populated", async () => {
+    // Java migrated to its own tree-sitter plugin in v0.14, so we exercise
+    // the regex-fallback path with PHP — it's still in the regex-fallback
+    // extension list and graph.ts's PHP parser supports `extends`.
     const files: SourceFile[] = [
       {
-        rel: "src/com/x/Base.java",
-        ext: "java",
-        content: "package com.x;\npublic class Base {}",
+        rel: "src/Base.php",
+        ext: "php",
+        content: "<?php\nnamespace App;\nclass Base {}\n",
       },
       {
-        rel: "src/com/x/Child.java",
-        ext: "java",
-        content:
-          "package com.x;\npublic class Child extends Base {}",
+        rel: "src/Child.php",
+        ext: "php",
+        content: "<?php\nnamespace App;\nclass Child extends Base {}\n",
       },
     ];
     const ix = makeIndex(files);
     await regexFallbackPlugin.prepareForRepo("/fake/root", ix);
     const parsed = regexFallbackPlugin.parseDirect(files[1], ix);
-    expect(parsed.rel).toBe("src/com/x/Child.java");
+    expect(parsed.rel).toBe("src/Child.php");
     expect(parsed.functions).toHaveLength(0);
     expect(parsed.calls).toHaveLength(0);
     expect(parsed.imports.length).toBeGreaterThanOrEqual(1);
     const extendsEdge = parsed.imports.find((i) => i.kind === "extends");
-    expect(extendsEdge?.resolvedPath).toBe("src/com/x/Base.java");
+    expect(extendsEdge?.resolvedPath).toBe("src/Base.php");
   });
 
   it("returns an empty ParsedFile for files no regex parser handles (html/css)", async () => {

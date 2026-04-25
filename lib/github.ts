@@ -22,6 +22,7 @@ import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
 import { analyzeDependencyHealth } from "./depsHealth/index";
 import { analyzeDirectory } from "./codeAnalysis/analyze";
 import { goPlugin } from "./codeAnalysis/plugins/go";
+import { javaPlugin } from "./codeAnalysis/plugins/java";
 import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
 import { pythonPlugin } from "./codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "./codeAnalysis/plugins/regexFallback";
@@ -463,6 +464,7 @@ export async function analyzeRepo(
         javascriptPlugin,
         pythonPlugin,
         goPlugin,
+        javaPlugin,
         regexFallbackPlugin,
       ]).then((r) => r.codeGraph),
     ]);
