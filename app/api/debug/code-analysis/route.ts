@@ -21,7 +21,8 @@ import { parseRepoUrl, fetchRepoMeta } from "@/lib/github";
 import { downloadAndExtract } from "@/lib/graph";
 import { analyzeDirectory } from "@/lib/codeAnalysis/analyze";
 import { javascriptPlugin } from "@/lib/codeAnalysis/plugins/javascript";
-import type { ParsedFile } from "@/lib/codeAnalysis/parse";
+import { regexFallbackPlugin } from "@/lib/codeAnalysis/plugins/regexFallback";
+import type { CodeGraph, ParsedFile } from "@/lib/codeAnalysis/types";
 
 const PostBody = z.object({
   repoUrl: z.string().min(1),
@@ -32,19 +33,6 @@ const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN || undefined,
   userAgent: "GitVision/0.1",
 });
-
-interface SuccessSummary {
-  repo: { owner: string; name: string; ref: string };
-  totals: ReturnType<typeof buildSummary>["totals"];
-  topComplex: ReturnType<typeof buildSummary>["topComplex"];
-  biggestFiles: ReturnType<typeof buildSummary>["biggestFiles"];
-  externalImports: ReturnType<typeof buildSummary>["externalImports"];
-  unresolvedCalls: ReturnType<typeof buildSummary>["unresolvedCalls"];
-  sampleImports: ReturnType<typeof buildSummary>["sampleImports"];
-  parseErrors: string[];
-  elapsedMs: number;
-  truncated: boolean;
-}
 
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -91,12 +79,17 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
     cleanup = extracted.cleanup;
     const tarballMs = Date.now() - tarballStart;
 
-    const result = await analyzeDirectory(extracted.extractDir, [javascriptPlugin]);
-    const summary = buildSummary(result.files);
+    const result = await analyzeDirectory(extracted.extractDir, [
+      javascriptPlugin,
+      regexFallbackPlugin,
+    ]);
+    const summary = buildSummary(result.files, result.codeGraph);
 
-    const payload: SuccessSummary = {
+    return NextResponse.json({
       repo: { owner: parsed.owner, name: parsed.repo, ref },
       totals: summary.totals,
+      byPlugin: result.codeGraph.byPlugin,
+      filesByExt: result.codeGraph.filesByExt,
       topComplex: summary.topComplex,
       biggestFiles: summary.biggestFiles,
       externalImports: summary.externalImports,
@@ -105,10 +98,6 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
       parseErrors: result.files.filter((f) => f.parseError).map((f) => f.rel),
       elapsedMs: Date.now() - overallStart,
       truncated: result.truncated,
-    };
-
-    return NextResponse.json({
-      ...payload,
       timings: {
         totalMs: Date.now() - overallStart,
         tarballMs,
@@ -131,34 +120,17 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
 // Same shape as the dev CLI (lib/codeAnalysis/cli.ts) so feedback transfers
 // directly between local and deployed analyses.
 
-function buildSummary(files: ParsedFile[]) {
-  // Totals (excluding the file-level scan counts which the route reports
-  // separately from analyzeDirectory.totals)
-  let functions = 0;
-  let imports = 0;
-  let resolvedImports = 0;
-  let calls = 0;
-  let resolvedCalls = 0;
-
-  const knownFunctions = new Set<string>();
-  for (const f of files) for (const fn of f.functions) knownFunctions.add(fn.name);
-
-  for (const f of files) {
-    functions += f.functions.length;
-    imports += f.imports.length;
-    resolvedImports += f.imports.filter((i) => i.resolvedPath).length;
-    calls += f.calls.length;
-    for (const c of f.calls) if (knownFunctions.has(c.calleeName)) resolvedCalls++;
-  }
-
+function buildSummary(files: ParsedFile[], codeGraph: CodeGraph) {
+  // Totals are derived directly from the CodeGraph aggregator so the API
+  // surface and the snapshot field stay in sync.
   const totals = {
     filesParsed: files.filter((f) => !f.parseError).length,
     parseErrors: files.filter((f) => f.parseError).length,
-    functions,
-    imports,
-    resolvedImports,
-    calls,
-    resolvedCalls,
+    functions: codeGraph.functions.length,
+    imports: files.reduce((s, f) => s + f.imports.length, 0),
+    resolvedImports: codeGraph.imports.length,
+    calls: codeGraph.calls.length,
+    resolvedCalls: codeGraph.calls.filter((c) => c.toFile !== null).length,
   };
 
   const topComplex = files
@@ -190,15 +162,17 @@ function buildSummary(files: ParsedFile[]) {
     .slice(0, 20)
     .map(([spec, count]) => ({ spec, count }));
 
+  // Use the CodeGraph's resolved call list to identify unresolved names —
+  // CodeGraph.calls have toFile = null when resolution failed (or there were
+  // ambiguous candidates). This is more accurate than the old "name not in
+  // knownFunctions set" heuristic, which counted any same-name match.
   const unresolvedCallCounts = new Map<string, number>();
-  for (const f of files) {
-    for (const c of f.calls) {
-      if (knownFunctions.has(c.calleeName)) continue;
-      unresolvedCallCounts.set(
-        c.calleeName,
-        (unresolvedCallCounts.get(c.calleeName) ?? 0) + 1
-      );
-    }
+  for (const c of codeGraph.calls) {
+    if (c.toFile !== null) continue;
+    unresolvedCallCounts.set(
+      c.calleeName,
+      (unresolvedCallCounts.get(c.calleeName) ?? 0) + 1
+    );
   }
   const unresolvedCalls = [...unresolvedCallCounts.entries()]
     .sort((a, b) => b[1] - a[1])

@@ -1039,6 +1039,51 @@ export async function buildFileGraph(
   }
 }
 
+// ------------------- In-memory entry point for codeAnalysis -------------------
+//
+// codeAnalysis's regex-fallback plugin uses this to feed the same already-
+// walked source tree through the regex parsers without re-extracting. Returns
+// a per-file map of edges (instead of nodes + layout), since codeAnalysis
+// only cares about the edge data — layout positions are recomputed at UI
+// time from CodeGraph.
+
+/** A non-resolving import edge: just `to` + `kind`, with `from` implied by the
+ *  map key. Kept loose for codeAnalysis interop without leaking FileRecord. */
+export interface RegexImportEdge {
+  to: string;
+  kind: FileGraphEdgeKind;
+}
+
+/** Run the regex-based per-language parsers against an in-memory list of
+ *  source files. Same parser dispatch as buildFileGraph — only difference is
+ *  no tarball / no walk / no layout. Returns a Map of repo-rel path → edges
+ *  emitted by that file. Files with no edges are absent from the map. */
+export function extractImportsFromSourceFiles(
+  files: { rel: string; ext: string; content: string }[]
+): Map<string, RegexImportEdge[]> {
+  const records: FileRecord[] = files.map((f) => ({
+    abs: f.rel, // unused by parsers/indexers — they only read .rel and .content
+    rel: f.rel,
+    ext: f.ext,
+    bytes: f.content.length,
+    content: f.content,
+  }));
+  const ix = buildIndexes(records);
+  const byFile = new Map<string, RegexImportEdge[]>();
+  for (const f of records) {
+    const parser = PARSER_BY_EXT[f.ext];
+    if (!parser) continue;
+    let edges: RegexImportEdge[];
+    try {
+      edges = parser(f, ix).map((e) => ({ to: e.to, kind: e.kind }));
+    } catch {
+      continue;
+    }
+    if (edges.length > 0) byFile.set(f.rel, edges);
+  }
+  return byFile;
+}
+
 // Avoid unused-import warnings
 void createWriteStream;
 void pipeline;

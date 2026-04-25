@@ -7,10 +7,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
   CodeAnalysisPlugin,
+  CodeGraph,
   FileIndex,
+  ParsedFile,
   SourceFile,
 } from "./types";
-import { parseFile, type ParsedFile } from "./parse";
+import { parseFile } from "./parse";
+import { buildCodeGraph } from "./codeGraph";
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -51,6 +54,8 @@ export interface AnalysisTotals {
 export interface AnalysisResult {
   root: string;
   files: ParsedFile[];
+  /** The cross-file aggregate. Phase 4 will lift this onto AnalysisSnapshot.codeGraph. */
+  codeGraph: CodeGraph;
   totals: AnalysisTotals;
   elapsedMs: number;
   truncated: boolean;
@@ -109,11 +114,15 @@ export async function analyzeDirectory(
   }
 
   const parsed: ParsedFile[] = [];
+  /** Records which plugin parsed each file. Drives CodeGraph.byPlugin stats
+   *  and lets the debug API/CLI show coverage per language family. */
+  const pluginByFile = new Map<string, string>();
   for (const f of sourceFiles) {
     const plugin = pluginByExt.get(f.ext);
     if (!plugin) continue;
     try {
       parsed.push(parseFile(plugin, f, fileIndex));
+      pluginByFile.set(f.rel, plugin.name);
     } catch (err) {
       parsed.push({
         rel: f.rel,
@@ -123,6 +132,7 @@ export async function analyzeDirectory(
         fileComplexity: 1,
         parseError: true,
       });
+      pluginByFile.set(f.rel, plugin.name);
       // Don't let one bad file kill the run — but surface it
       console.error(
         `parse failed for ${f.rel}: ${
@@ -132,32 +142,32 @@ export async function analyzeDirectory(
     }
   }
 
-  const knownFunctions = new Set<string>();
-  for (const pf of parsed) for (const fn of pf.functions) knownFunctions.add(fn.name);
+  // Build the CodeGraph (cross-file aggregate). The orchestrator passes the
+  // plugin-by-file map so byPlugin stats stay accurate without ParsedFile
+  // having to carry plugin identity itself.
+  const codeGraph = buildCodeGraph({
+    parsedFiles: parsed,
+    pluginByFile,
+    truncated: truncated
+      ? `Walker hit MAX_FILES cap (${maxFiles})`
+      : undefined,
+  });
 
   const totals: AnalysisTotals = {
     filesScanned: sourceFiles.length,
     filesParsed: parsed.filter((p) => !p.parseError).length,
     parseErrors: parsed.filter((p) => p.parseError).length,
-    functions: 0,
-    imports: 0,
-    resolvedImports: 0,
-    calls: 0,
-    resolvedCalls: 0,
+    functions: codeGraph.functions.length,
+    imports: parsed.reduce((s, p) => s + p.imports.length, 0),
+    resolvedImports: codeGraph.imports.length,
+    calls: codeGraph.calls.length,
+    resolvedCalls: codeGraph.calls.filter((c) => c.toFile !== null).length,
   };
-  for (const pf of parsed) {
-    totals.functions += pf.functions.length;
-    totals.imports += pf.imports.length;
-    totals.resolvedImports += pf.imports.filter((i) => i.resolvedPath).length;
-    totals.calls += pf.calls.length;
-    for (const c of pf.calls) {
-      if (knownFunctions.has(c.calleeName)) totals.resolvedCalls++;
-    }
-  }
 
   return {
     root,
     files: parsed,
+    codeGraph,
     totals,
     elapsedMs: Date.now() - start,
     truncated,

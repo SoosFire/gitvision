@@ -1,42 +1,25 @@
-// Per-file parser. Takes a SourceFile, runs the plugin's queries against its
-// AST, and returns the extracted symbols. Queries are compiled once per
-// (plugin, ext) and cached for the life of the process.
+// Per-file parser. Two execution paths:
+//
+//   1. Tree-sitter (default): plugin provides languageFor + queriesFor; we
+//      compile queries once per (plugin, ext) and walk match captures by the
+//      canonical capture names from types.ts.
+//
+//   2. parseDirect (alternative): plugin returns a ParsedFile itself, used by
+//      the regex-fallback plugin that wraps lib/graph.ts's existing parsers.
+//      The orchestrator picks the right path based on which methods the plugin
+//      defines — same outer call shape regardless.
 
 import { Parser, Query, type Language } from "web-tree-sitter";
 import type {
   CodeAnalysisPlugin,
   FileIndex,
+  ParsedCall,
+  ParsedFile,
+  ParsedFunction,
+  ParsedImport,
   PluginQueries,
   SourceFile,
 } from "./types";
-
-export interface ParsedImport {
-  rawSpec: string;
-  resolvedPath: string | null;
-}
-
-export interface ParsedFunction {
-  name: string;
-  startRow: number;
-  endRow: number;
-  complexity: number;
-}
-
-export interface ParsedCall {
-  calleeName: string;
-  /** Name of the enclosing function/method. null for module-scope calls. */
-  inFunction: string | null;
-}
-
-export interface ParsedFile {
-  rel: string;
-  imports: ParsedImport[];
-  functions: ParsedFunction[];
-  calls: ParsedCall[];
-  /** Total decision points across the whole file + 1. */
-  fileComplexity: number;
-  parseError: boolean;
-}
 
 interface CompiledQueries {
   imports: Query | null;
@@ -68,12 +51,29 @@ function compileQueries(
   return compiled;
 }
 
-/** Parse one file and extract imports, functions, calls, complexity. */
+/** Parse one file. Dispatches to the plugin's parseDirect when defined,
+ *  otherwise runs the tree-sitter pipeline. */
 export function parseFile(
   plugin: CodeAnalysisPlugin,
   file: SourceFile,
   fileIndex: FileIndex
 ): ParsedFile {
+  if (plugin.parseDirect) {
+    return plugin.parseDirect(file, fileIndex);
+  }
+  return parseFileWithTreeSitter(plugin, file, fileIndex);
+}
+
+function parseFileWithTreeSitter(
+  plugin: CodeAnalysisPlugin,
+  file: SourceFile,
+  fileIndex: FileIndex
+): ParsedFile {
+  if (!plugin.languageFor || !plugin.queriesFor) {
+    throw new Error(
+      `Plugin ${plugin.name} has neither parseDirect nor languageFor+queriesFor — cannot parse ${file.rel}`
+    );
+  }
   const lang = plugin.languageFor(file.ext);
   const sources = plugin.queriesFor(file.ext);
   const cacheKey = `${plugin.name}:${file.ext}`;
@@ -193,3 +193,12 @@ function findEnclosingFunction(
 export function __resetQueryCache() {
   compiledQueryCache.clear();
 }
+
+// Re-export the per-file types from types.ts so existing callers that import
+// from "./parse" keep working. New callers should import from "./types".
+export type {
+  ParsedCall,
+  ParsedFile,
+  ParsedFunction,
+  ParsedImport,
+} from "./types";

@@ -2,23 +2,14 @@
 // codeAnalysis extracted. Run as `npm run analyze <path>`. Used to eyeball
 // query behavior on real repos before UI integration.
 //
-// Output shape (JSON on stdout):
-//   {
-//     target,              -- absolute path analyzed
-//     elapsedMs,           -- wall-clock time
-//     truncated,           -- true if MAX_FILES hit
-//     totals,              -- file / function / import / call counts
-//     topComplex,          -- 10 highest cyclomatic complexity functions
-//     biggestFiles,        -- 10 files with most code (by function count)
-//     externalImports,     -- top 15 external modules imported
-//     unresolvedCalls,     -- top 15 unresolved callee names (often externals)
-//     sampleImports,       -- first 5 files with imports, trimmed per file
-//     parseErrors,         -- list of files the parser refused
-//   }
+// Output shape (JSON on stdout): totals, top-complex, biggest-files,
+// external imports, unresolved calls, sample imports, parse errors,
+// plus the CodeGraph.byPlugin breakdown showing which plugin handled what.
 
 import path from "node:path";
 import { analyzeDirectory } from "./analyze";
 import { javascriptPlugin } from "./plugins/javascript";
+import { regexFallbackPlugin } from "./plugins/regexFallback";
 
 async function main() {
   const target = process.argv[2];
@@ -28,8 +19,11 @@ async function main() {
   }
   const abs = path.resolve(target);
 
-  const result = await analyzeDirectory(abs, [javascriptPlugin]);
-  const { totals, elapsedMs, files, truncated } = result;
+  const result = await analyzeDirectory(abs, [
+    javascriptPlugin,
+    regexFallbackPlugin,
+  ]);
+  const { totals, elapsedMs, files, truncated, codeGraph } = result;
 
   // Top 10 most complex functions
   const topComplex = files
@@ -97,6 +91,8 @@ async function main() {
     elapsedMs,
     truncated,
     totals,
+    byPlugin: codeGraph.byPlugin,
+    filesByExt: codeGraph.filesByExt,
     topComplex,
     biggestFiles,
     externalImports,

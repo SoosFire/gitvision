@@ -246,7 +246,7 @@ function resolveAgainstFiles(
 
 // ------------------- Plugin -------------------
 
-export const javascriptPlugin: CodeAnalysisPlugin = {
+export const javascriptPlugin = {
   name: PLUGIN_NAME,
   extensions: EXTENSIONS,
 
@@ -294,4 +294,4 @@ export const javascriptPlugin: CodeAnalysisPlugin = {
   },
 
   resolveImport: resolveJsImport,
-};
+} satisfies CodeAnalysisPlugin;
