@@ -120,6 +120,10 @@ function bfs(
   const hopOf = new Map<string, number>();
   hopOf.set(start, 0);
   const queue: string[] = [start];
+  // Tracks result entries only — start is excluded so the cap reflects what
+  // the UI actually displays. Without this you'd see "Capped at 200" with
+  // 199 entries because the visited Map includes the target.
+  let entryCount = 0;
   let truncated = false;
 
   while (queue.length > 0) {
@@ -130,12 +134,13 @@ function bfs(
     if (!neighbors) continue;
     for (const n of neighbors) {
       if (hopOf.has(n)) continue;
-      if (hopOf.size >= maxNodes) {
+      if (entryCount >= maxNodes) {
         truncated = true;
         break;
       }
       hopOf.set(n, hop + 1);
       queue.push(n);
+      entryCount++;
     }
     if (truncated) break;
   }

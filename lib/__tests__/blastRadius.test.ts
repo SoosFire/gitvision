@@ -148,7 +148,7 @@ describe("computeBlastRadius", () => {
     ]);
   });
 
-  it("flags truncated when the per-direction node cap is hit", () => {
+  it("flags truncated when the per-direction node cap is hit, capping at exactly maxNodes entries", () => {
     const cg = emptyCodeGraph();
     // 50 fan-in files all pointing at target
     for (let i = 0; i < 50; i++) {
@@ -159,7 +159,9 @@ describe("computeBlastRadius", () => {
       });
     }
     const b = computeBlastRadius(cg, "target.ts", { maxNodes: 10 });
-    expect(b.incoming.length).toBeLessThan(50);
+    // The cap counts result entries (target is not an entry), so exactly
+    // maxNodes entries are surfaced — no off-by-one in the truncation message.
+    expect(b.incoming.length).toBe(10);
     expect(b.truncated).toMatch(/Capped at 10/);
   });
 

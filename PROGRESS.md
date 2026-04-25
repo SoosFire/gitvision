@@ -18,13 +18,13 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.10, end of session 4)
+## Current state (v0.11, end of session 4)
 
 ### What works end-to-end
 
 - Paste a public GitHub URL → session created with full initial snapshot
 - Sessions saved as JSON files on disk, listed on landing page
-- Session page tabs: **Canvas / Imports / Packages / PRs / Overview**
+- Session page tabs: **Canvas / Imports / Code / Packages / PRs / Overview**
 - Loading UI during analysis: 5-stage progress with gradient bar, not a blank 30s wait
 - **Canvas (hero view):**
   - Folder frames with labels (`● foldername · N files`)
@@ -55,7 +55,8 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 - **Refresh:** append snapshot, show "Since your last visit" diff banner with emerald gradient.
 - **Session CRUD:** rename, delete, multiple sessions. Session actions grouped: Share dropdown (Wrapped / Share card / Screenshot), primary Refresh, overflow menu for Delete.
 - **Rate-limit aware:** shows remaining in footer.
-- **Code-analysis foundation (v0.10):** AST-based parser for JS/TS via tree-sitter (WASM), regex-fallback for the other 7 languages, unified `CodeGraph` aggregate ready to lift onto snapshots in Phase 4. **No UI yet** — exposed via `/api/debug/code-analysis` for live testing and `npm run analyze <path>` for local inspection. See "Code-analysis pipeline" below.
+- **Code tab (v0.11):** AST-based blast-radius UI on top of the codeAnalysis pipeline. Picks the heaviest file by default, shows incoming + outgoing dependency hops (3 deep, capped at 200 files per direction), the file's top-6 functions in the header, plus side-by-side "heaviest files" and "most complex functions" lists for quick navigation. Coverage chip is honest: full call-graph + complexity for JS/TS, imports only for the 7 fallback languages. New snapshots get `codeGraph` populated automatically; old snapshots show an empty state pointing to the Refresh button.
+- **Code-analysis pipeline (v0.10 foundation):** AST-based parser for JS/TS via tree-sitter (WASM), regex-fallback for the other 7 languages, unified `CodeGraph` aggregate persisted on every fresh snapshot since Phase 4a. Also exposed standalone via `/api/debug/code-analysis` for live testing and `npm run analyze <path>` for local inspection. See "Code-analysis pipeline" below.
 
 ### Dependency-health pipeline (v0.9 architecture)
 
@@ -166,8 +167,9 @@ lib/codeAnalysis/
 - `fileComplexity`, `filesByExt`, `byPlugin` — stats for UI/debug
 - `truncated`, `generatedAt` — caps + freshness
 
-**Where it's exposed today (no UI yet — Phase 4 work):**
-- `GET /api/debug/code-analysis?repo=owner/name` — runs full pipeline against a public repo, returns JSON summary. Auto-deployed on Railway.
+**Where it's exposed:**
+- **Code tab on every session page (v0.11)** — blast radius hero card + heaviest-files + most-complex-functions lists. Reads `snapshot.codeGraph` directly; the BFS runs client-side (`lib/codeAnalysis/blastRadius.ts`) so picking a different file recomputes instantly without a server round-trip.
+- `GET /api/debug/code-analysis?repo=owner/name` — full pipeline against a public repo, JSON summary. Auto-deployed on Railway.
 - `npm run analyze <local-path>` — same shape, runs against a local checkout.
 
 **Migration story for the 7 fallback languages:** add a tree-sitter plugin file per language (one file each), shrink `regexFallbackPlugin.extensions`, eventually delete `lib/graph.ts` entirely when the last language migrates.
@@ -277,7 +279,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**169 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI).
+**180 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). Phase 4b added `blastRadius.test.ts` (11 tests) covering BFS depth/node caps, cycle handling, import + call edge merging, self-edge defense, and exact-cap truncation.
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -331,24 +333,21 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.7 — Linear-lighter UI rework (forced dark theme, TOK tokens, lucide icons, all components restyled)
 - ✅ v0.8 — Dep-health v1 (npm only, monorepo-aware), LICENSE, vitest + 50 tests
 - ✅ v0.9 — Plugin architecture + Cargo + PyPI + dedicated Packages panel (+ tab rename "Dependencies" → "Imports")
-- ✅ v0.10 — Tier 2 foundation (Phases 1-3): tree-sitter for JS/TS via WASM, regex-fallback wrapper for the other 7 languages, unified `CodeGraph` aggregator, debug API + dev CLI for live testing. **No UI yet** — that's Phase 4.
+- ✅ v0.10 — Tier 2 foundation (Phases 1-3): tree-sitter for JS/TS via WASM, regex-fallback wrapper for the other 7 languages, unified `CodeGraph` aggregator, debug API + dev CLI for live testing.
+- ✅ v0.11 — Tier 2 complete (Phases 4a-b): `codeGraph` lifted onto `AnalysisSnapshot` via shared tarball-extract with `FileGraph` (Phase 4a). Code tab with Blast Radius UI: heaviest-file default, incoming/outgoing hop lists, twin lists for navigation, honest coverage chip (Phase 4b).
 
-### Next up: Tier 2 Phase 4 — snapshot integration + UI
+### Next up: Tier 2 polish (when motivated, one file each)
 
-Phase 4a (snapshot integration, ~1 evening):
-- Lift `CodeGraph` onto `AnalysisSnapshot.codeGraph` (optional field, defensive backward-compat)
-- Wire `analyzeDirectory` into `lib/github.ts:analyzeRepo` — reuses the already-extracted tarball that `buildFileGraph` produces, no double download
-- Verify old snapshots on disk still deserialize cleanly
+Now that Tier 2 is feature-complete and shipped to UI, the remaining work is
+gradual quality lift — each language migrated from regex-fallback to its own
+tree-sitter plugin gains full call-graph + complexity coverage in the Code
+tab without any other code changes.
 
-Phase 4b (UI panel, ~1-2 evenings):
-- New tab or panel: blast radius for a selected file, top-complex function list, complexity heatmap per file, by-plugin coverage indicator
-- Use existing TOK tokens, lucide icons, dark theme
-
-Future Tier 2 polish (when motivated, one file each):
-- Migrate Python from regex-fallback to tree-sitter — adds full call-graph + complexity for one of the most common stacks
-- Migrate Java / Kotlin / Go / C# / PHP / Ruby in any order
-- AST-based duplicate detection via tree-walking similarity hashes
-- Test-to-code mapping refinements using the call-graph
+- Migrate Python from regex-fallback to tree-sitter — adds full call-graph + complexity for one of the most common stacks. Highest immediate impact.
+- Migrate Java / Kotlin / Go / C# / PHP / Ruby in any order — same pattern, ~1 evening each.
+- Function-level blast radius (today the hero is file-level) — the call-graph is per-function but the UI projects to files. Could add a "click a function chip → blast radius for just that function".
+- AST-based duplicate detection via tree-walking similarity hashes.
+- Test-to-code mapping refinements using the call-graph.
 
 ### Dep-health follow-ups (small, anytime)
 
@@ -441,4 +440,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.10 — Tier 2 foundation: tree-sitter JS/TS, regex-fallback for 7 langs, CodeGraph aggregator, debug API + dev CLI). Phase 4 ships the UI.*
+*Last updated: end of session 4 (v0.11 — Tier 2 complete: tree-sitter JS/TS + regex-fallback for 7 langs + CodeGraph aggregator + snapshot integration + Code tab with Blast Radius UI).*
