@@ -7,19 +7,22 @@ import { Constellation } from "./views/Constellation";
 import { DependencyCanvas } from "./views/DependencyCanvas";
 import { PRFlow } from "./views/PRFlow";
 import { PackagesPanel } from "./views/PackagesPanel";
+import { CodePanel } from "./views/CodePanel";
 import { HotspotTreemap } from "./views/HotspotTreemap";
 import { ContributorList } from "./views/ContributorList";
 import { LanguageBar } from "./views/LanguageBar";
 import { BusFactorPanel } from "./views/BusFactorPanel";
 import { CommitActivity } from "./views/CommitActivity";
 
-type TabName = "canvas" | "dependencies" | "packages" | "prs" | "overview";
+type TabName = "canvas" | "dependencies" | "code" | "packages" | "prs" | "overview";
 
 export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
   const [tab, setTab] = useState<TabName>("canvas");
   const hasGraph = !!snap.fileGraph;
   const prCount = snap.pullRequests?.length ?? 0;
   const depCount = snap.fileGraph?.nodes.length ?? 0;
+  const codeFunctionCount = snap.codeGraph?.functions.length ?? 0;
+  const hasCodeGraph = !!snap.codeGraph;
 
   // Package-dependency count across ecosystems — shown on the "Packages"
   // tab. Uses the sum of unique packages (monorepo-aware).
@@ -53,6 +56,13 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
           hint={hasGraph ? undefined : "refresh"}
           active={tab === "dependencies"}
           onClick={() => setTab("dependencies")}
+        />
+        <Tab
+          label="Code"
+          count={hasCodeGraph ? codeFunctionCount : undefined}
+          hint={hasCodeGraph ? undefined : "refresh"}
+          active={tab === "code"}
+          onClick={() => setTab("code")}
         />
         <Tab
           label="Packages"
@@ -104,6 +114,18 @@ export function SessionTabs({ snap }: { snap: AnalysisSnapshot }) {
             File-to-file imports, extends/implements and framework-specific
             edges (e.g. Spring MVC controller → template). Layered top-down:
             entry points at top, leaves at bottom.
+          </p>
+        </div>
+      )}
+
+      {tab === "code" && (
+        <div className="flex flex-col gap-4">
+          <CodePanel snapshot={snap} />
+          <p className="text-xs" style={{ color: TOK.textMuted }}>
+            Pick a file (or click one in the heaviest-files / top-complex
+            lists) to see its blast radius. Incoming = files that break if you
+            change this. Outgoing = what this depends on. Hops capped at 3 to
+            keep central files from showing &quot;everything&quot;.
           </p>
         </div>
       )}
