@@ -8,7 +8,7 @@ Welcome. This file is the primary context you need to work effectively on GitVis
 
 1. **Read `PROGRESS.md`** — 300+ lines of current state, design decisions, signal catalog, and the next-steps menu. You can't plan meaningful work without it.
 2. **Run `git log -10 --oneline`** — the last ten commits usually explain what changed most recently and why.
-3. **Run `npm run test:run`** — confirm the 85-test suite is green before you start. If red on a fresh checkout, fix that first; don't build on a broken baseline.
+3. **Run `npm run test:run`** — confirm the 169-test suite is green before you start. If red on a fresh checkout, fix that first; don't build on a broken baseline.
 4. **Greet the user in Danish.** See "Who you're working with" below.
 5. **Ask what they want to work on** before suggesting. They often have context you don't. Default to proposing from the `PROGRESS.md` roadmap if they're open.
 
@@ -80,7 +80,7 @@ These are decisions we made deliberately and with reasoning. Breaking them witho
 ### 1. Plugin architecture for language-specific work
 
 - **Dep-health ecosystems** (`lib/depsHealth/ecosystems/*.ts`) — adding Go, Maven, NuGet, Gradle, etc. must be one file implementing `EcosystemPlugin`. Do NOT add language-specific branches to `lib/depsHealth/index.ts`, `lib/signals.ts`, `lib/types.ts`, or any UI component.
-- Future AST/tree-sitter work (`lib/codeAnalysis/`) will follow the same pattern.
+- **Code-analysis plugins** (`lib/codeAnalysis/plugins/*.ts`, v0.10) — same pattern. JS/TS lives in `javascript.ts` (tree-sitter), the 7 other languages share `regexFallback.ts` (wraps `lib/graph.ts`'s regex parsers). When migrating a language to tree-sitter, drop a new file in `plugins/`, register it in the orchestrator (`cli.ts` + debug API), shrink `regexFallback.ts`'s extension list. Never branch by language outside plugin files.
 - If you find yourself writing `if (ecosystem === "cargo")` anywhere outside a plugin file, stop and refactor.
 
 ### 2. Defensive fallbacks for old snapshots
@@ -124,6 +124,16 @@ Don't accept PRs or suggest architectural changes that would make commercializat
 - Breaking changes from earlier majors. Before using any API you remember, check `node_modules/next/dist/docs/` in the repo for the v16 version.
 - The lockfile-conflict warning needs explicit `turbopack.root` in `next.config.ts`.
 - `create-next-app` rejects uppercase in package name. Scaffold to a temp dir with lowercase name, then move files up.
+- **Production build runs webpack, not Turbopack** (`next build --webpack` in package.json). Turbopack v16 chokes on Emscripten-style WASM packages — it generates a loader file that imports `"GOT.mem"`, `"env"`, `"wasi_snapshot_preview1"` and fails resolution. Webpack with `serverExternalPackages` handles this fine. Dev server still uses Turbopack for speed.
+- WASM packages in App Router routes need `serverExternalPackages: [...]` AND `outputFileTracingIncludes` (top-level in `next.config.ts`, NOT under `experimental` in v16). Both are configured for `web-tree-sitter` + `@vscode/tree-sitter-wasm`.
+
+### Tree-sitter / WASM (codeAnalysis pipeline, v0.10)
+
+- Use **`process.cwd() + "node_modules/..."`** for resolving WASM file paths in `lib/codeAnalysis/runtime.ts`. Not `createRequire(import.meta.url)` — Turbopack's dev externalization replaces resolved paths with synthetic `[externals]/...` markers that fail `fs.readFile`. `process.cwd()` is bundler-agnostic.
+- Plugin contract has **two parsing paths**: tree-sitter (`languageFor` + `queriesFor`) OR direct (`parseDirect`). Both methods are optional in the interface; plugins implement exactly one path. The orchestrator dispatches automatically.
+- Plugins should use `satisfies CodeAnalysisPlugin` rather than `: CodeAnalysisPlugin` annotation, so the concrete-method type is preserved for tests that call optional methods directly.
+- Adding a new tree-sitter language: add the grammar to `@vscode/tree-sitter-wasm` if missing (or add `tree-sitter-wasms` for less-common ones), create a single plugin file under `lib/codeAnalysis/plugins/`, register in the orchestrator's plugin list (currently `cli.ts` and the debug API route).
+- TS-ESM convention: `import "./foo.js"` resolves to `./foo.ts` on disk. The JS plugin's resolver handles `.js↔.ts`, `.jsx↔.tsx`, `.mjs↔.mts`, `.cjs↔.cts` swaps. Don't reinvent.
 
 ### Tailwind CSS v4
 
@@ -308,6 +318,8 @@ curl -s -X POST http://localhost:3000/api/sessions \
 | Why a design decision was made | Commit message for that change (`git log --grep=<keyword>`) |
 | Signal detector behavior | `lib/signals.ts` + `lib/__tests__/signals.test.ts` |
 | How to add a new dep-health language | `lib/depsHealth/ecosystems/npm.ts` as reference + implement `EcosystemPlugin` |
+| How to add a tree-sitter language plugin | `lib/codeAnalysis/plugins/javascript.ts` as reference + implement `CodeAnalysisPlugin` (tree-sitter path) |
+| Code-analysis architecture overview | `PROGRESS.md` → "Code-analysis pipeline (v0.10 architecture)" |
 | Theme tokens | `lib/theme.ts` (single source of truth) |
 | User preferences / communication style | This file (top sections) |
 | Technical gotchas | This file ("Gotchas" section) |

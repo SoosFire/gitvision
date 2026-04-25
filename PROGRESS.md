@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.9, end of session 3)
+## Current state (v0.10, end of session 4)
 
 ### What works end-to-end
 
@@ -43,6 +43,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
   - Languages: **JS/TS/JSX/TSX/MJS/CJS, Java, Kotlin, C#, PHP, Ruby, Python, Go** + HTML/CSS as render targets
   - Edge kinds: `import`, `renders` (Spring MVC controller → template), `extends`, `implements`
   - Toggleable per kind, path-search filter, "hide isolated" toggle, click to isolate 1-hop neighborhood
+  - Backed by `lib/graph.ts` regex pipeline; in v0.10 this also drives `codeAnalysis`'s regex-fallback plugin for the 7 non-JS languages so a single tarball-extract feeds both panels
 - **Packages tab (v0.9):** multi-ecosystem dependency health — see "Dependency-health pipeline" below
 - **PRs tab** (v0.3): sankey of cycle-time flow (Opened → Merged / Closed / Still-open → time-to-merge bucket). Powered by d3-sankey. Median-time-to-merge + merged-% stats.
 - **Overview tab:** hotspot treemap (muted teal→emerald→amber→rose palette, label truncation with ellipsis), contributor list, language mix, bus factor per folder, weekly commit activity.
@@ -54,6 +55,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 - **Refresh:** append snapshot, show "Since your last visit" diff banner with emerald gradient.
 - **Session CRUD:** rename, delete, multiple sessions. Session actions grouped: Share dropdown (Wrapped / Share card / Screenshot), primary Refresh, overflow menu for Delete.
 - **Rate-limit aware:** shows remaining in footer.
+- **Code-analysis foundation (v0.10):** AST-based parser for JS/TS via tree-sitter (WASM), regex-fallback for the other 7 languages, unified `CodeGraph` aggregate ready to lift onto snapshots in Phase 4. **No UI yet** — exposed via `/api/debug/code-analysis` for live testing and `npm run analyze <path>` for local inspection. See "Code-analysis pipeline" below.
 
 ### Dependency-health pipeline (v0.9 architecture)
 
@@ -88,6 +90,87 @@ with `sources[]` tracking which manifest files declared each dep.
 
 Backward-compat: pre-v0.9 snapshots stored singular `dependencyHealth`.
 Read-side helper `getDependencyHealths()` normalizes both shapes.
+
+### Code-analysis pipeline (v0.10 architecture)
+
+Plugin-based, designed so adding a new language (or migrating one off regex
+to AST) is a single file. Same mindset as `lib/depsHealth/`.
+
+```
+lib/codeAnalysis/
+├── analyze.ts              Orchestrator — walks a directory, runs every
+│                           plugin whose extensions are present, aggregates
+│                           results into a CodeGraph.
+├── codeGraph.ts            Cross-file aggregator: function index, call
+│                           resolution + disambiguation, import dedup,
+│                           per-plugin stats roll-up.
+├── parse.ts                Per-file dispatcher — tree-sitter pipeline OR
+│                           plugin-supplied parseDirect (regex / non-AST).
+├── runtime.ts              web-tree-sitter WASM bootstrap + grammar cache.
+├── tsconfig.ts             tsconfig/jsconfig loader for path mappings.
+├── workspaces.ts           pnpm/yarn/npm workspace package discovery.
+├── types.ts                Plugin contract + CodeGraph types.
+├── cli.ts                  Dev CLI: `npm run analyze <path>`.
+└── plugins/
+    ├── javascript.ts       Tree-sitter (JS/TS/TSX/MJS/CJS/MTS/CTS) — full
+    │                       imports + functions + calls + complexity.
+    └── regexFallback.ts    Wraps lib/graph.ts's per-language regex parsers
+                            (Java, Kotlin, C#, PHP, Ruby, Python, Go +
+                            HTML/CSS as passive). Imports-only — no
+                            functions/calls/complexity from regex.
+```
+
+**Two execution paths in the plugin contract:**
+- Tree-sitter plugins implement `languageFor(ext)` + `queriesFor(ext)`. The
+  orchestrator compiles S-expression queries and walks captures by canonical
+  names (`spec`, `name`, `callee`, `body`, `params`).
+- Direct plugins implement `parseDirect(file, ix)`. Used when AST parsing
+  doesn't apply (the regex-fallback plugin) or as an escape hatch.
+
+**Coverage matrix (live-tested against real repos):**
+
+| Language family | Plugin | Imports | Functions | Calls | Complexity |
+|---|---|---|---|---|---|
+| JS / TS / JSX / TSX / MJS / CJS / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ |
+| Java, Kotlin, C#, PHP, Ruby, Python, Go | `regex-fallback` | ✅ regex | — | — | — |
+
+**Resolver features (the JS/TS plugin):**
+- TS-ESM convention: `./foo.js` spec → `./foo.ts` file (and the .jsx/.mjs/.cjs ↔ .tsx/.mts/.cts pairs).
+- tsconfig path mappings (`@/*`, `~/*`, etc.) loaded per-repo.
+- Workspace package resolution (`@scope/name` → `packages/name/src/index.ts`) for pnpm/yarn/npm monorepos.
+- Empty / dot path resolution (`import "../.."` → `index.{ts,js,...}` at repo root).
+- Vendored / minified file filter — skips `tests/assets/`, `vendor/`, `*.min.js`, and content with avg-line-length signatures of bundled output.
+
+**Live validation matrix** (resolved-imports % is a meaningful proxy for resolver coverage):
+
+| Repo | Stack | Files | Resolved imports |
+|---|---|---|---|
+| ai/nanoid | JS | 21 | 27.8% (mostly external) |
+| colinhacks/zod | TS monorepo | 400 | 67.0% |
+| vuejs/core | TS monorepo | 524 | 86.6% |
+| vitejs/vite | TS monorepo | 1,434 | 47.0% |
+| trpc/trpc | TS monorepo | 902 | 64.1% |
+| tanstack/query | TS monorepo | 1,003 | 56.0% |
+| vercel/swr | TS | 262 | 35.1% |
+| preactjs/preact | JS | 237 | 38.8% |
+| expressjs/express | JS (CJS) | 141 | 38.8% |
+| microsoft/playwright | TS | 1,526 | 51.9% |
+| spring-projects/spring-petclinic | Java | 60 | 100% |
+| django/django | Python | 3,360 | 99.99% |
+| golang/example | Go | 40 | 100% |
+
+**Outputs per repo (the `CodeGraph` shape):**
+- `functions: FunctionDef[]` — name + filePath + rows + complexity
+- `calls: CallEdge[]` — fromFile, fromFunction, calleeName, toFile, toFunction
+- `imports: ImportEdge[]` — from, to, kind (import / extends / implements / renders)
+- `fileComplexity`, `filesByExt`, `byPlugin` — stats for UI/debug
+- `truncated`, `generatedAt` — caps + freshness
+
+**Where it's exposed today (no UI yet — Phase 4 work):**
+- `GET /api/debug/code-analysis?repo=owner/name` — runs full pipeline against a public repo, returns JSON summary. Auto-deployed on Railway.
+- `npm run analyze <local-path>` — same shape, runs against a local checkout.
+
+**Migration story for the 7 fallback languages:** add a tree-sitter plugin file per language (one file each), shrink `regexFallbackPlugin.extensions`, eventually delete `lib/graph.ts` entirely when the last language migrates.
 
 ### Signal catalog (v0.9 — 17 detectors)
 
@@ -164,44 +247,57 @@ Graceful fallback: if `git` isn't on PATH, REST-only path (80-commit sample). If
 - **PR review stages not tracked** — sankey is Opened → Outcome → duration.
 - **Linux-kernel-sized repos won't fit** — 10k commit / 120k file-change caps protect the server.
 - **Monorepo hotspots still dominated by version-bump files.** Metadata-dominance signal flags it; the `hide-metadata` canvas toggle masks it in the visual.
-- **Regex-based code parsers are ~90-95% accurate, not 100%.** Edge cases get approximated. AST swap is Tier 2 work (see "Next up").
+- **JS/TS code analysis is AST-based (tree-sitter); the other 7 languages still go through regex.** Functions, call-graph and complexity are JS/TS-only as of v0.10 — regex-fallback contributes imports only. Migrating each of Java/Kotlin/C#/PHP/Ruby/Python/Go to tree-sitter is one plugin file each, no architectural work.
 - **Dep-health ecosystem coverage:** npm / Cargo / PyPI only as of v0.9. Go / Maven / NuGet / etc. are plugin-additions (one file each) — not architectural work.
 - **React Flow console warning** about fresh `nodeTypes` object refs — harmless but noisy.
 
 ### Testing
 
-Vitest-based unit tests (added v0.8 as part of the "eat our own dog food" action):
+Vitest-based unit tests (added v0.8 as part of the "eat our own dog food" action; substantially expanded in v0.10 alongside Tier 2 foundation):
 
 ```
 lib/__tests__/
-├── github.test.ts       parseRepoUrl, computeHotspots, computeCoChange,
-│                        computeCommitActivity (15 tests)
-├── depsHealth.test.ts   npm normalizeVersion (8 tests)
-├── cargo.test.ts        Cargo normalizer + parseManifest across simple/
-│                        inline/git/path/renamed/workspace/malformed (17 tests)
-├── pypi.test.ts         PyPI normalizer + requirements.txt + pyproject.toml
-│                        (PEP 621 / Poetry / Flit dialects) (18 tests)
-└── signals.test.ts      Detector behavior with mock snapshots (27 tests)
+├── github.test.ts          parseRepoUrl, computeHotspots, computeCoChange,
+│                           computeCommitActivity (15 tests)
+├── depsHealth.test.ts      npm normalizeVersion (8 tests)
+├── cargo.test.ts           Cargo normalizer + parseManifest variants (17 tests)
+├── pypi.test.ts            PyPI normalizer + requirements.txt + pyproject.toml
+│                           (PEP 621 / Poetry / Flit dialects) (18 tests)
+├── signals.test.ts         Detector behavior with mock snapshots (27 tests)
+├── codeAnalysis.test.ts    Runtime, plugin contract, queries, parser
+│                           extraction, JS/TS resolver across all the
+│                           bug fixes, vendored/minified filter (44 tests)
+├── tsconfig.test.ts        Tsconfig path-mapping reader: JSONC tolerance,
+│                           wildcard substitution, baseUrl handling (12 tests)
+├── workspaces.test.ts      Workspace package discovery: Yarn/npm forms,
+│                           pnpm fallback, source-entry probing (9 tests)
+├── codeGraph.test.ts       Cross-file aggregator: function index, call
+│                           disambiguation, import dedup, byPlugin (10 tests)
+└── regexFallback.test.ts   extractImportsFromSourceFiles + plugin wiring
+                            for Java/Python/Go (9 tests)
 ```
 
-**85 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI).
+**169 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI).
 
-Tests caught 2 real bugs on first run: `lib/` was incorrectly in `OUTPUT_LIKE_FOLDERS` (making us silently ignore legitimate src/↔lib/ coupling), and a toContain assertion pattern.
+Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
 ---
 
 ## Tech stack reminders
 
-- **Next.js 16 (App Router, Turbopack).** Breaking changes from earlier majors — check `node_modules/next/dist/docs/01-app/` before assuming old patterns work.
+- **Next.js 16 (App Router).** Breaking changes from earlier majors — check `node_modules/next/dist/docs/01-app/` before assuming old patterns work.
+  - Dev uses Turbopack (default in v16). **Production build uses webpack** (`next build --webpack`) — Turbopack chokes on Emscripten-style WASM packages like web-tree-sitter. See `next.config.ts` for `serverExternalPackages` + `outputFileTracingIncludes` config.
 - **React 19** + TypeScript 5.
 - **Tailwind CSS v4** — arbitrary values (`bg-[#...]`) sometimes behave oddly when imported from `"use client"` components. Canvas and dep-health UI use inline `style={}` with TOK tokens for reliability.
 - **@xyflow/react (React Flow 12).** CSS imported in `app/globals.css` (NOT inside components — caused silent render failures).
 - **D3 v7** — treemap, color scales, hierarchy. `d3-sankey` for PR flow.
 - **`@iarna/toml`** — TOML parser used by Cargo + PyPI plugins.
 - **`tar` npm package** — for tarball extraction in `lib/graph.ts`.
+- **`web-tree-sitter` + `@vscode/tree-sitter-wasm`** (v0.10) — AST parsing for the `codeAnalysis` pipeline. WASM-only so it works identically on Mac, Linux/Railway, Windows, and a future Tauri build. Path resolution uses `process.cwd() + "node_modules/..."` to dodge bundler externalization quirks.
 - **Server-side `git` binary** — required on PATH for full history; falls back to REST sample if missing.
 - **`@anthropic-ai/sdk`** — Claude Sonnet 4.5 for AI summary + health narrative. Optional.
 - **`lucide-react`** — icons.
+- **`tsx`** — ESM-native TS runner for the dev CLI (`npm run analyze`).
 - **`vitest`** — unit tests (dev dep).
 
 ---
@@ -235,18 +331,24 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.7 — Linear-lighter UI rework (forced dark theme, TOK tokens, lucide icons, all components restyled)
 - ✅ v0.8 — Dep-health v1 (npm only, monorepo-aware), LICENSE, vitest + 50 tests
 - ✅ v0.9 — Plugin architecture + Cargo + PyPI + dedicated Packages panel (+ tab rename "Dependencies" → "Imports")
+- ✅ v0.10 — Tier 2 foundation (Phases 1-3): tree-sitter for JS/TS via WASM, regex-fallback wrapper for the other 7 languages, unified `CodeGraph` aggregator, debug API + dev CLI for live testing. **No UI yet** — that's Phase 4.
 
-### Next up: Tier 2 — AST-based code understanding (next session)
+### Next up: Tier 2 Phase 4 — snapshot integration + UI
 
-The single biggest multiplier we haven't built. Unlocks multiple killer features:
+Phase 4a (snapshot integration, ~1 evening):
+- Lift `CodeGraph` onto `AnalysisSnapshot.codeGraph` (optional field, defensive backward-compat)
+- Wire `analyzeDirectory` into `lib/github.ts:analyzeRepo` — reuses the already-extracted tarball that `buildFileGraph` produces, no double download
+- Verify old snapshots on disk still deserialize cleanly
 
-- **Real call-graph via tree-sitter** (multi-language, WASM, fast)
-- **Blast radius analysis** — "if you change `auth/session.ts`, these N files and M tests are directly affected, these K transitively"
-- **Real cyclomatic complexity** per function, drift over time
-- **Precise test-to-code mapping** via import edges (already scaffolded in `hasTestCoverage`'s layer 2)
-- **Duplicate detection** via AST similarity
+Phase 4b (UI panel, ~1-2 evenings):
+- New tab or panel: blast radius for a selected file, top-complex function list, complexity heatmap per file, by-plugin coverage indicator
+- Use existing TOK tokens, lucide icons, dark theme
 
-Estimated scope: 3-5 days hobby-tempo. Same plugin mindset as dep-health — `lib/codeAnalysis/` directory, one plugin per language.
+Future Tier 2 polish (when motivated, one file each):
+- Migrate Python from regex-fallback to tree-sitter — adds full call-graph + complexity for one of the most common stacks
+- Migrate Java / Kotlin / Go / C# / PHP / Ruby in any order
+- AST-based duplicate detection via tree-walking similarity hashes
+- Test-to-code mapping refinements using the call-graph
 
 ### Dep-health follow-ups (small, anytime)
 
@@ -267,7 +369,7 @@ Each is ~1 evening of work, no blocking:
 - Auto-upgrade old snapshots on first view (currently user must click Refresh)
 - Landing-page hero illustration + demo-repo row
 - Per-contributor "Wrapped"-style achievements — extended cards
-- AST-based parsers for JS/TS/Java — upgrade path from regex
+- *(Done in v0.10 for JS/TS via tree-sitter; Java + the other 5 languages are one-file plugin migrations whenever we want them.)*
 
 ### Big swings (non-blocking, for when core features settle)
 
@@ -339,4 +441,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 3 (v0.9 — plugin architecture + Cargo + PyPI + Packages UI + license change to PolyForm NC).*
+*Last updated: end of session 4 (v0.10 — Tier 2 foundation: tree-sitter JS/TS, regex-fallback for 7 langs, CodeGraph aggregator, debug API + dev CLI). Phase 4 ships the UI.*
