@@ -13,8 +13,13 @@ import { javascriptPlugin } from "../codeAnalysis/plugins/javascript";
 import { parseFile } from "../codeAnalysis/parse";
 import type { FileIndex, SourceFile } from "../codeAnalysis/types";
 
-// Shared helper — build a FileIndex from a list of SourceFiles.
-function makeIndex(files: SourceFile[]): FileIndex {
+// Shared helper — build a FileIndex from a list of SourceFiles. Optional
+// `extras` arg lets tests pre-populate the per-plugin extras bag (e.g.
+// tsconfig path mappings) without going through prepareForRepo's I/O.
+function makeIndex(
+  files: SourceFile[],
+  extras: Map<string, unknown> = new Map()
+): FileIndex {
   const byPath = new Map<string, SourceFile>();
   const byExt = new Map<string, SourceFile[]>();
   for (const f of files) {
@@ -23,7 +28,7 @@ function makeIndex(files: SourceFile[]): FileIndex {
     arr.push(f);
     byExt.set(f.ext, arr);
   }
-  return { byPath, byExt };
+  return { byPath, byExt, extras };
 }
 
 describe("codeAnalysis runtime", () => {
@@ -59,9 +64,18 @@ describe("javascriptPlugin", () => {
     await javascriptPlugin.load();
   });
 
-  it("advertises the six JS/TS extensions", () => {
+  it("advertises the eight JS/TS extensions including .mts/.cts", () => {
     expect([...javascriptPlugin.extensions].sort()).toEqual(
-      ["cjs", "js", "jsx", "mjs", "ts", "tsx"]
+      ["cjs", "cts", "js", "jsx", "mjs", "mts", "ts", "tsx"]
+    );
+  });
+
+  it("languageFor maps .mts/.cts to the typescript grammar", () => {
+    expect(javascriptPlugin.languageFor("mts")).toBe(
+      javascriptPlugin.languageFor("ts")
+    );
+    expect(javascriptPlugin.languageFor("cts")).toBe(
+      javascriptPlugin.languageFor("ts")
     );
   });
 
@@ -161,6 +175,142 @@ describe("javascriptPlugin.resolveImport", () => {
   it("returns null for unknown relative paths", () => {
     expect(
       javascriptPlugin.resolveImport("./not-here", "src/a.ts", ix)
+    ).toBeNull();
+  });
+
+  it("TS-ESM convention: ./foo.js spec resolves to ./foo.ts file", () => {
+    // This is THE pattern modern TS libraries use (zod, lit, fastify, ...).
+    // The TS compiler doesn't rewrite specifiers, so source must say .js even
+    // though the file on disk is .ts.
+    expect(
+      javascriptPlugin.resolveImport("./utils/helpers.js", "src/a.ts", ix)
+    ).toBe("src/utils/helpers.ts");
+  });
+
+  it("TS-ESM convention covers .jsx/.tsx, .mjs/.mts, .cjs/.cts pairs", () => {
+    const files: SourceFile[] = [
+      { rel: "src/Btn.tsx", ext: "tsx", content: "" },
+      { rel: "src/loader.mts", ext: "mts", content: "" },
+      { rel: "src/legacy.cts", ext: "cts", content: "" },
+    ];
+    const ix2 = makeIndex(files);
+    expect(javascriptPlugin.resolveImport("./Btn.jsx", "src/a.ts", ix2)).toBe(
+      "src/Btn.tsx"
+    );
+    expect(javascriptPlugin.resolveImport("./loader.mjs", "src/a.ts", ix2)).toBe(
+      "src/loader.mts"
+    );
+    expect(javascriptPlugin.resolveImport("./legacy.cjs", "src/a.ts", ix2)).toBe(
+      "src/legacy.cts"
+    );
+  });
+
+  it("prefers exact match over .js→.ts swap when both files exist", () => {
+    const files: SourceFile[] = [
+      { rel: "src/foo.js", ext: "js", content: "" }, // real .js file
+      { rel: "src/foo.ts", ext: "ts", content: "" }, // also a .ts neighbor
+    ];
+    const ix2 = makeIndex(files);
+    expect(javascriptPlugin.resolveImport("./foo.js", "src/a.ts", ix2)).toBe(
+      "src/foo.js" // exact match wins
+    );
+  });
+});
+
+describe("javascriptPlugin.resolveImport — tsconfig path mappings", () => {
+  const files: SourceFile[] = [
+    { rel: "src/lib/types.ts", ext: "ts", content: "" },
+    { rel: "src/components/Button.tsx", ext: "tsx", content: "" },
+    { rel: "src/utils/helpers.ts", ext: "ts", content: "" },
+    { rel: "shared/logger.ts", ext: "ts", content: "" },
+  ];
+
+  it("resolves @/lib/types via tsconfig paths {@/* → src/*}", () => {
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        { baseUrl: "", paths: { "@/*": ["src/*"] } },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    expect(
+      javascriptPlugin.resolveImport("@/lib/types", "anywhere.ts", ix)
+    ).toBe("src/lib/types.ts");
+  });
+
+  it("resolves ~/* aliased to a different prefix", () => {
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        { baseUrl: "", paths: { "~/*": ["shared/*"] } },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    expect(
+      javascriptPlugin.resolveImport("~/logger", "anywhere.ts", ix)
+    ).toBe("shared/logger.ts");
+  });
+
+  it("respects baseUrl when joining substitutions", () => {
+    // baseUrl: "src" + paths { "@/*": ["./*"] } means "@/lib/types" → src/lib/types
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        { baseUrl: "src", paths: { "@/*": ["./*"] } },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    expect(
+      javascriptPlugin.resolveImport("@/lib/types", "src/x.ts", ix)
+    ).toBe("src/lib/types.ts");
+  });
+
+  it("supports multiple substitutions, returning the first that hits a real file", () => {
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        {
+          baseUrl: "",
+          paths: {
+            "@app/*": ["nonexistent/*", "src/components/*"],
+          },
+        },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    expect(
+      javascriptPlugin.resolveImport("@app/Button", "anywhere.ts", ix)
+    ).toBe("src/components/Button.tsx");
+  });
+
+  it("falls back to relative resolution when no path mapping matches", () => {
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        { baseUrl: "", paths: { "@/*": ["src/*"] } },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    // Spec doesn't match @/* — should resolve relative as before
+    expect(
+      javascriptPlugin.resolveImport(
+        "../utils/helpers",
+        "src/components/Button.tsx",
+        ix
+      )
+    ).toBe("src/utils/helpers.ts");
+  });
+
+  it("returns null when path mapping points at nothing real", () => {
+    const extras = new Map<string, unknown>([
+      [
+        "javascript",
+        { baseUrl: "", paths: { "@/*": ["src/*"] } },
+      ],
+    ]);
+    const ix = makeIndex(files, extras);
+    expect(
+      javascriptPlugin.resolveImport("@/does/not/exist", "x.ts", ix)
     ).toBeNull();
   });
 });

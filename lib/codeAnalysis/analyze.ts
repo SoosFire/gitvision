@@ -90,7 +90,23 @@ export async function analyzeDirectory(
     arr.push(f);
     byExt.set(f.ext, arr);
   }
-  const fileIndex: FileIndex = { byPath, byExt };
+  const fileIndex: FileIndex = { byPath, byExt, extras: new Map() };
+
+  // Per-repo plugin setup (e.g. tsconfig paths). Plugins that don't need
+  // anything skip this hook; the orchestrator stays language-agnostic.
+  for (const p of plugins) {
+    if (p.prepareForRepo) {
+      try {
+        await p.prepareForRepo(root, fileIndex);
+      } catch (err) {
+        console.error(
+          `prepareForRepo failed for ${p.name}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+  }
 
   const parsed: ParsedFile[] = [];
   for (const f of sourceFiles) {

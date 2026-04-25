@@ -29,6 +29,12 @@ export interface SourceFile {
 export interface FileIndex {
   byPath: Map<string, SourceFile>;
   byExt: Map<string, SourceFile[]>;
+  /** Per-plugin opaque storage keyed by plugin.name. Plugins that need
+   *  per-repo config (tsconfig paths, go.mod module path, etc.) populate
+   *  this in their `prepareForRepo` hook and read it in `resolveImport`.
+   *  Other plugins ignore unrelated keys. Keeps language-specific data
+   *  out of orchestrator code. */
+  extras: Map<string, unknown>;
 }
 
 /** Tree-sitter query sources (S-expressions). The orchestrator compiles each
@@ -51,6 +57,12 @@ export interface CodeAnalysisPlugin {
   /** Load and cache tree-sitter Language(s) for this plugin. Called once per
    *  analysis run. Idempotent — safe to call repeatedly. */
   load(): Promise<void>;
+
+  /** Optional per-repo setup. Called once per `analyzeDirectory` run, after
+   *  the FileIndex is built but before any parseFile call. Use this to read
+   *  language-specific config files (tsconfig.json, jsconfig.json, go.mod,
+   *  ...) and stash them on `ix.extras` keyed by the plugin's name. */
+  prepareForRepo?(root: string, ix: FileIndex): Promise<void>;
 
   /** Pick the Language to use for a given extension. Must be called after load(). */
   languageFor(ext: string): Language;
