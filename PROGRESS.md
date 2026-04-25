@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.12, end of session 4)
+## Current state (v0.13, end of session 4)
 
 ### What works end-to-end
 
@@ -115,11 +115,13 @@ lib/codeAnalysis/
 └── plugins/
     ├── javascript.ts       Tree-sitter (JS/TS/TSX/MJS/CJS/MTS/CTS) — full
     │                       imports + functions + calls + complexity.
-    ├── python.ts           Tree-sitter (.py) — same coverage as
-    │                       javascript.ts. Migrated from regex-fallback
-    │                       in v0.12.
+    ├── python.ts           Tree-sitter (.py) — same coverage. Migrated
+    │                       from regex-fallback in v0.12.
+    ├── go.ts               Tree-sitter (.go) — same coverage. Migrated in
+    │                       v0.13. prepareForRepo reads go.mod for
+    │                       module-prefix-aware import resolution.
     └── regexFallback.ts    Wraps lib/graph.ts's per-language regex parsers
-                            (Java, Kotlin, C#, PHP, Ruby, Go + HTML/CSS as
+                            (Java, Kotlin, C#, PHP, Ruby + HTML/CSS as
                             passive). Imports-only — no functions/calls/
                             complexity from regex.
 ```
@@ -137,7 +139,8 @@ lib/codeAnalysis/
 |---|---|---|---|---|---|
 | JS / TS / JSX / TSX / MJS / CJS / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ |
 | Python (.py) | `python` (v0.12) | ✅ AST | ✅ | ✅ | ✅ |
-| Java, Kotlin, C#, PHP, Ruby, Go | `regex-fallback` | ✅ regex | — | — | — |
+| Go (.go) | `go` (v0.13) | ✅ AST | ✅ | ✅ | ✅ |
+| Java, Kotlin, C#, PHP, Ruby | `regex-fallback` | ✅ regex | — | — | — |
 
 **Resolver features (the JS/TS plugin):**
 - TS-ESM convention: `./foo.js` spec → `./foo.ts` file (and the .jsx/.mjs/.cjs ↔ .tsx/.mts/.cts pairs).
@@ -283,7 +286,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**196 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.12 added `python.test.ts` (16 tests) covering the grammar load, all five import forms (absolute, relative, sub-package, parent-package, fuzzy suffix), function/method extraction, attribute calls, and Python-specific complexity counting (elif, except, boolean_operator, conditional_expression).
+**213 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.13 added `go.test.ts` (17 tests) covering grammar load, single + grouped imports, blank/aliased imports, prepareForRepo reading `go.mod` (incl. malformed file recovery), prefix-strip vs suffix-match resolution paths, function + method declarations, complexity counting (if/for/switch cases excluding default/&&/||).
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -339,16 +342,16 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.9 — Plugin architecture + Cargo + PyPI + dedicated Packages panel (+ tab rename "Dependencies" → "Imports")
 - ✅ v0.10 — Tier 2 foundation (Phases 1-3): tree-sitter for JS/TS via WASM, regex-fallback wrapper for the other 7 languages, unified `CodeGraph` aggregator, debug API + dev CLI for live testing.
 - ✅ v0.11 — Tier 2 complete (Phases 4a-b): `codeGraph` lifted onto `AnalysisSnapshot` via shared tarball-extract with `FileGraph` (Phase 4a). Code tab with Blast Radius UI: heaviest-file default, incoming/outgoing hop lists, twin lists for navigation, honest coverage chip (Phase 4b).
-- ✅ v0.12 — Python migrated from regex-fallback to its own tree-sitter plugin. Live impact on django/django: from 0 functions / 0 calls (regex-fallback had imports only) to **31,894 functions, 183,798 calls** with full per-function complexity. Top-complex now surfaces real Django hotspots like `_alter_field @ 91` (schema migrations) and `__new__ @ 62` (model metaclass).
+- ✅ v0.12 — Python migrated to its own tree-sitter plugin. Live impact on django/django: 0 → **31,894 functions, 183,798 calls** with full per-function complexity. Top-complex surfaces real Django hotspots like `_alter_field @ 91` (schema migrations) and `__new__ @ 62` (model metaclass).
+- ✅ v0.13 — Go migrated to its own tree-sitter plugin. `prepareForRepo` reads `go.mod` for module-prefix-aware import resolution, with a suffix-match heuristic as fallback. Live impact across four repos: gin (1,311 fns), cobra (589), testify (1,519), terraform (16,930). Top-complex surfaces gin's radix-tree router internals, cobra's shell completion, testify's `compare`, terraform's `backendFromConfig`.
 
 ### Next up: continue Tier 2 polish (when motivated, one file each)
 
-Each remaining language migration follows the exact pattern from v0.12 —
-new plugin file, register in three places, shrink regexFallback's
+Each remaining language migration follows the exact pattern from v0.12-13
+— new plugin file, register in three places, shrink regexFallback's
 extension list, ship.
 
-- Migrate Java — second-largest impact. Spring projects and Android codebases get full call-graph.
-- Migrate Go — relatively simple grammar; should be quick.
+- Migrate Java — biggest remaining impact. Spring projects and Android codebases get full call-graph.
 - Migrate Kotlin, C#, PHP, Ruby — in any order, ~1 evening each.
 - Function-level blast radius (today the hero is file-level) — the call-graph is per-function but the UI projects to files. Could add a "click a function chip → blast radius for just that function".
 - AST-based duplicate detection via tree-walking similarity hashes.
@@ -445,4 +448,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.12 — Python migrated to tree-sitter; first language migration off regex-fallback, validates the plugin pattern: one new file in plugins/, register in three places, shrink regex-fallback's extension list).*
+*Last updated: end of session 4 (v0.13 — Go migrated to tree-sitter, second language off regex-fallback. Pattern now validated across two languages with different module systems: Python's relative-import quirks and Go's go.mod-based resolution both fit the same plugin contract).*

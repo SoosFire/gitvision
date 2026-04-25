@@ -34,17 +34,15 @@ const PLUGIN_NAME = "regex-fallback";
  *  the JVM regex parser needs them in the FileIndex to resolve controller →
  *  template "renders" edges (Spring MVC convention).
  *
- *  Python migrated to a dedicated tree-sitter plugin in v0.12 — see
- *  plugins/python.ts. As more languages migrate this list will shrink, and
- *  when it's empty this whole file (plus lib/graph.ts's regex parsers) can
- *  be deleted. */
+ *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13.
+ *  As more languages migrate this list will shrink, and when it's empty
+ *  this whole file (plus lib/graph.ts's regex parsers) can be deleted. */
 const EXTENSIONS = [
   "java",
   "kt",
   "cs",
   "php",
   "rb",
-  "go",
   "html",
   "css",
 ] as const;

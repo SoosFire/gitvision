@@ -20,6 +20,7 @@ import { z } from "zod";
 import { parseRepoUrl, fetchRepoMeta } from "@/lib/github";
 import { downloadAndExtract } from "@/lib/graph";
 import { analyzeDirectory } from "@/lib/codeAnalysis/analyze";
+import { goPlugin } from "@/lib/codeAnalysis/plugins/go";
 import { javascriptPlugin } from "@/lib/codeAnalysis/plugins/javascript";
 import { pythonPlugin } from "@/lib/codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "@/lib/codeAnalysis/plugins/regexFallback";
@@ -83,6 +84,7 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
     const result = await analyzeDirectory(extracted.extractDir, [
       javascriptPlugin,
       pythonPlugin,
+      goPlugin,
       regexFallbackPlugin,
     ]);
     const summary = buildSummary(result.files, result.codeGraph);
