@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.11, end of session 4)
+## Current state (v0.12, end of session 4)
 
 ### What works end-to-end
 
@@ -115,10 +115,13 @@ lib/codeAnalysis/
 └── plugins/
     ├── javascript.ts       Tree-sitter (JS/TS/TSX/MJS/CJS/MTS/CTS) — full
     │                       imports + functions + calls + complexity.
+    ├── python.ts           Tree-sitter (.py) — same coverage as
+    │                       javascript.ts. Migrated from regex-fallback
+    │                       in v0.12.
     └── regexFallback.ts    Wraps lib/graph.ts's per-language regex parsers
-                            (Java, Kotlin, C#, PHP, Ruby, Python, Go +
-                            HTML/CSS as passive). Imports-only — no
-                            functions/calls/complexity from regex.
+                            (Java, Kotlin, C#, PHP, Ruby, Go + HTML/CSS as
+                            passive). Imports-only — no functions/calls/
+                            complexity from regex.
 ```
 
 **Two execution paths in the plugin contract:**
@@ -133,7 +136,8 @@ lib/codeAnalysis/
 | Language family | Plugin | Imports | Functions | Calls | Complexity |
 |---|---|---|---|---|---|
 | JS / TS / JSX / TSX / MJS / CJS / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ |
-| Java, Kotlin, C#, PHP, Ruby, Python, Go | `regex-fallback` | ✅ regex | — | — | — |
+| Python (.py) | `python` (v0.12) | ✅ AST | ✅ | ✅ | ✅ |
+| Java, Kotlin, C#, PHP, Ruby, Go | `regex-fallback` | ✅ regex | — | — | — |
 
 **Resolver features (the JS/TS plugin):**
 - TS-ESM convention: `./foo.js` spec → `./foo.ts` file (and the .jsx/.mjs/.cjs ↔ .tsx/.mts/.cts pairs).
@@ -279,7 +283,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**180 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). Phase 4b added `blastRadius.test.ts` (11 tests) covering BFS depth/node caps, cycle handling, import + call edge merging, self-edge defense, and exact-cap truncation.
+**196 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.12 added `python.test.ts` (16 tests) covering the grammar load, all five import forms (absolute, relative, sub-package, parent-package, fuzzy suffix), function/method extraction, attribute calls, and Python-specific complexity counting (elif, except, boolean_operator, conditional_expression).
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -335,16 +339,17 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.9 — Plugin architecture + Cargo + PyPI + dedicated Packages panel (+ tab rename "Dependencies" → "Imports")
 - ✅ v0.10 — Tier 2 foundation (Phases 1-3): tree-sitter for JS/TS via WASM, regex-fallback wrapper for the other 7 languages, unified `CodeGraph` aggregator, debug API + dev CLI for live testing.
 - ✅ v0.11 — Tier 2 complete (Phases 4a-b): `codeGraph` lifted onto `AnalysisSnapshot` via shared tarball-extract with `FileGraph` (Phase 4a). Code tab with Blast Radius UI: heaviest-file default, incoming/outgoing hop lists, twin lists for navigation, honest coverage chip (Phase 4b).
+- ✅ v0.12 — Python migrated from regex-fallback to its own tree-sitter plugin. Live impact on django/django: from 0 functions / 0 calls (regex-fallback had imports only) to **31,894 functions, 183,798 calls** with full per-function complexity. Top-complex now surfaces real Django hotspots like `_alter_field @ 91` (schema migrations) and `__new__ @ 62` (model metaclass).
 
-### Next up: Tier 2 polish (when motivated, one file each)
+### Next up: continue Tier 2 polish (when motivated, one file each)
 
-Now that Tier 2 is feature-complete and shipped to UI, the remaining work is
-gradual quality lift — each language migrated from regex-fallback to its own
-tree-sitter plugin gains full call-graph + complexity coverage in the Code
-tab without any other code changes.
+Each remaining language migration follows the exact pattern from v0.12 —
+new plugin file, register in three places, shrink regexFallback's
+extension list, ship.
 
-- Migrate Python from regex-fallback to tree-sitter — adds full call-graph + complexity for one of the most common stacks. Highest immediate impact.
-- Migrate Java / Kotlin / Go / C# / PHP / Ruby in any order — same pattern, ~1 evening each.
+- Migrate Java — second-largest impact. Spring projects and Android codebases get full call-graph.
+- Migrate Go — relatively simple grammar; should be quick.
+- Migrate Kotlin, C#, PHP, Ruby — in any order, ~1 evening each.
 - Function-level blast radius (today the hero is file-level) — the call-graph is per-function but the UI projects to files. Could add a "click a function chip → blast radius for just that function".
 - AST-based duplicate detection via tree-walking similarity hashes.
 - Test-to-code mapping refinements using the call-graph.
@@ -440,4 +445,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.11 — Tier 2 complete: tree-sitter JS/TS + regex-fallback for 7 langs + CodeGraph aggregator + snapshot integration + Code tab with Blast Radius UI).*
+*Last updated: end of session 4 (v0.12 — Python migrated to tree-sitter; first language migration off regex-fallback, validates the plugin pattern: one new file in plugins/, register in three places, shrink regex-fallback's extension list).*

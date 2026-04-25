@@ -101,9 +101,11 @@ describe("extractImportsFromSourceFiles", () => {
 });
 
 describe("regexFallbackPlugin", () => {
-  it("advertises the seven non-JS languages plus html/css for resolution", () => {
+  it("advertises the six remaining non-AST languages plus html/css for resolution", () => {
+    // Python migrated to its own tree-sitter plugin in v0.12 — see
+    // plugins/python.ts. As more languages migrate this list shrinks.
     expect([...regexFallbackPlugin.extensions].sort()).toEqual(
-      ["cs", "css", "go", "html", "java", "kt", "php", "py", "rb"]
+      ["cs", "css", "go", "html", "java", "kt", "php", "rb"]
     );
   });
 

@@ -22,6 +22,7 @@ import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
 import { analyzeDependencyHealth } from "./depsHealth/index";
 import { analyzeDirectory } from "./codeAnalysis/analyze";
 import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
+import { pythonPlugin } from "./codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "./codeAnalysis/plugins/regexFallback";
 
 const octokit = new Octokit({
@@ -459,6 +460,7 @@ export async function analyzeRepo(
       buildFileGraphFromDir(extracted.extractDir),
       analyzeDirectory(extracted.extractDir, [
         javascriptPlugin,
+        pythonPlugin,
         regexFallbackPlugin,
       ]).then((r) => r.codeGraph),
     ]);

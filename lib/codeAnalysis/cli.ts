@@ -9,6 +9,7 @@
 import path from "node:path";
 import { analyzeDirectory } from "./analyze";
 import { javascriptPlugin } from "./plugins/javascript";
+import { pythonPlugin } from "./plugins/python";
 import { regexFallbackPlugin } from "./plugins/regexFallback";
 
 async function main() {
@@ -21,6 +22,7 @@ async function main() {
 
   const result = await analyzeDirectory(abs, [
     javascriptPlugin,
+    pythonPlugin,
     regexFallbackPlugin,
   ]);
   const { totals, elapsedMs, files, truncated, codeGraph } = result;

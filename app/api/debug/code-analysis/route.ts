@@ -21,6 +21,7 @@ import { parseRepoUrl, fetchRepoMeta } from "@/lib/github";
 import { downloadAndExtract } from "@/lib/graph";
 import { analyzeDirectory } from "@/lib/codeAnalysis/analyze";
 import { javascriptPlugin } from "@/lib/codeAnalysis/plugins/javascript";
+import { pythonPlugin } from "@/lib/codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "@/lib/codeAnalysis/plugins/regexFallback";
 import type { CodeGraph, ParsedFile } from "@/lib/codeAnalysis/types";
 
@@ -81,6 +82,7 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
 
     const result = await analyzeDirectory(extracted.extractDir, [
       javascriptPlugin,
+      pythonPlugin,
       regexFallbackPlugin,
     ]);
     const summary = buildSummary(result.files, result.codeGraph);

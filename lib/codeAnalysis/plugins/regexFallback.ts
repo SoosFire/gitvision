@@ -29,17 +29,21 @@ import { extractImportsFromSourceFiles } from "../../graph";
 
 const PLUGIN_NAME = "regex-fallback";
 
-/** Languages handled by the existing regex parsers in lib/graph.ts. Plus
+/** Languages still handled by the regex parsers in lib/graph.ts. Plus
  *  HTML/CSS as passive file types — we don't extract anything from them, but
  *  the JVM regex parser needs them in the FileIndex to resolve controller →
- *  template "renders" edges (Spring MVC convention). */
+ *  template "renders" edges (Spring MVC convention).
+ *
+ *  Python migrated to a dedicated tree-sitter plugin in v0.12 — see
+ *  plugins/python.ts. As more languages migrate this list will shrink, and
+ *  when it's empty this whole file (plus lib/graph.ts's regex parsers) can
+ *  be deleted. */
 const EXTENSIONS = [
   "java",
   "kt",
   "cs",
   "php",
   "rb",
-  "py",
   "go",
   "html",
   "css",
