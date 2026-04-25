@@ -51,12 +51,16 @@ const SKIP_DIRS = new Set([
 const MAX_FILE_BYTES = 1_000_000; // 1MB — skip minified/generated files
 const MAX_TOTAL_FILES = 3000; // safety cap
 
-async function downloadAndExtract(
+/** Download a GitHub repo tarball, extract it to a temp dir, return the
+ *  extracted-source path plus a cleanup function. Exported so codeAnalysis
+ *  can reuse the same primitive for its own pipeline (and a future dev/debug
+ *  endpoint) without duplicating tar logic. */
+export async function downloadAndExtract(
   octokit: Octokit,
   owner: string,
   repo: string,
   ref: string
-): Promise<string> {
+): Promise<{ extractDir: string; cleanup: () => Promise<void> }> {
   const tmpRoot = path.join(os.tmpdir(), `gitvision-${nanoid(8)}`);
   await fs.mkdir(tmpRoot, { recursive: true });
 
@@ -83,7 +87,12 @@ async function downloadAndExtract(
   });
 
   await fs.unlink(tarballPath).catch(() => {});
-  return extractDir;
+  return {
+    extractDir,
+    cleanup: async () => {
+      await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+    },
+  };
 }
 
 async function walkFiles(root: string): Promise<string[]> {
@@ -961,10 +970,11 @@ export async function buildFileGraph(
   repo: string,
   defaultBranch: string
 ): Promise<FileGraph> {
-  let root: string | null = null;
+  let cleanup: (() => Promise<void>) | null = null;
   try {
-    root = await downloadAndExtract(octokit, owner, repo, defaultBranch);
-    const records = await readCodeFiles(root);
+    const extracted = await downloadAndExtract(octokit, owner, repo, defaultBranch);
+    cleanup = extracted.cleanup;
+    const records = await readCodeFiles(extracted.extractDir);
 
     const truncated =
       records.length >= MAX_TOTAL_FILES
@@ -1025,10 +1035,7 @@ export async function buildFileGraph(
       truncated: err instanceof Error ? err.message : "Unknown error",
     };
   } finally {
-    if (root) {
-      const cleanupRoot = path.dirname(root);
-      fs.rm(cleanupRoot, { recursive: true, force: true }).catch(() => {});
-    }
+    if (cleanup) await cleanup();
   }
 }
 

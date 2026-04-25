@@ -4,13 +4,28 @@
 // same code runs on Railway (Linux), local dev (Mac/Windows), and a future
 // Tauri build without platform-specific compilation. ~2× slower parse than
 // native, irrelevant next to the ~2-5s of network I/O per analyzed repo.
+//
+// Path resolution policy:
+//   We resolve WASM paths from `process.cwd()` rather than via createRequire.
+//   The reason is bundler-agnostic correctness: webpack with serverExternalPackages
+//   gives us the real node_modules path, but Turbopack's dev externalization
+//   replaces the resolved string with a synthetic "[externals]/…" marker. By
+//   skipping the bundler's resolver entirely, dev (Turbopack) and build
+//   (Webpack) and Railway runtime all behave identically. Assumes flat
+//   node_modules at the project root, which is GitVision's convention.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { Parser, Language } from "web-tree-sitter";
 
-const req = createRequire(import.meta.url);
+const NODE_MODULES = path.join(process.cwd(), "node_modules");
+const WTS_DIR = path.join(NODE_MODULES, "web-tree-sitter");
+const VSCODE_GRAMMAR_DIR = path.join(
+  NODE_MODULES,
+  "@vscode",
+  "tree-sitter-wasm",
+  "wasm"
+);
 
 let initPromise: Promise<void> | null = null;
 
@@ -19,9 +34,7 @@ let initPromise: Promise<void> | null = null;
 export function ensureRuntime(): Promise<void> {
   if (!initPromise) {
     initPromise = (async () => {
-      // Core WASM ships with web-tree-sitter. Read it explicitly and hand it
-      // to Emscripten as wasmBinary so it doesn't try to fetch over HTTP.
-      const corePath = req.resolve("web-tree-sitter/web-tree-sitter.wasm");
+      const corePath = path.join(WTS_DIR, "web-tree-sitter.wasm");
       const buf = await fs.readFile(corePath);
       await Parser.init({ wasmBinary: new Uint8Array(buf) });
     })();
@@ -32,10 +45,7 @@ export function ensureRuntime(): Promise<void> {
 /** Absolute path to a grammar WASM in @vscode/tree-sitter-wasm.
  *  @param name File name without the .wasm suffix, e.g. "tree-sitter-javascript". */
 export function grammarPath(name: string): string {
-  // The package's "main" is wasm/tree-sitter.js — resolve it, then look next
-  // door for the grammar file.
-  const mainPath = req.resolve("@vscode/tree-sitter-wasm");
-  return path.join(path.dirname(mainPath), `${name}.wasm`);
+  return path.join(VSCODE_GRAMMAR_DIR, `${name}.wasm`);
 }
 
 const langCache = new Map<string, Language>();
