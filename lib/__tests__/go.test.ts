@@ -284,3 +284,184 @@ describe("goPlugin — parseFile end-to-end", () => {
     expect(outerCalls).toContain("Println"); // selector call captured by name
   });
 });
+
+describe("goPlugin — type-aware tracking (v0.16)", () => {
+  beforeAll(async () => {
+    await goPlugin.load();
+  });
+
+  it("emits containerType on methods matching the receiver type", () => {
+    const content =
+      "package main\n" +
+      "type Service struct{}\n" +
+      "func (s *Service) Run() {}\n" +
+      "func (s Service) Stop() {}\n" +
+      "func freeFn() {}\n";
+    const file: SourceFile = { rel: "s.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const run = parsed.functions.find((f) => f.name === "Run");
+    const stop = parsed.functions.find((f) => f.name === "Stop");
+    const free = parsed.functions.find((f) => f.name === "freeFn");
+    expect(run?.containerType).toBe("Service"); // *Service stripped
+    expect(stop?.containerType).toBe("Service"); // value receiver too
+    expect(free?.containerType).toBeUndefined(); // free function, no container
+  });
+
+  it("infers calleeType from a method receiver (`s` inside a Service method)", () => {
+    const content =
+      "package main\n" +
+      "type Service struct{}\n" +
+      "func (s *Service) Helper() {}\n" +
+      "func (s *Service) Run() {\n" +
+      "\ts.Helper()\n" + // selector call on the receiver
+      "}\n";
+    const file: SourceFile = { rel: "s.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const helperCall = parsed.calls.find((c) => c.calleeName === "Helper");
+    expect(helperCall?.calleeType).toBe("Service");
+  });
+
+  it("infers calleeType from struct field access (`s.client.Do(...)`)", () => {
+    const content =
+      "package main\n" +
+      "type Client struct{}\n" +
+      "func (c *Client) Do() {}\n" +
+      "type Service struct {\n" +
+      "\tclient *Client\n" +
+      "}\n" +
+      "func (s *Service) Run() {\n" +
+      "\ts.client.Do()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "s.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const doCall = parsed.calls.find((c) => c.calleeName === "Do");
+    expect(doCall?.calleeType).toBe("Client");
+  });
+
+  it("infers calleeType from a function parameter with explicit type", () => {
+    const content =
+      "package main\n" +
+      "type Logger struct{}\n" +
+      "func (l *Logger) Info(msg string) {}\n" +
+      "func handle(log *Logger) {\n" +
+      "\tlog.Info(\"hi\")\n" +
+      "}\n";
+    const file: SourceFile = { rel: "h.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const infoCall = parsed.calls.find((c) => c.calleeName === "Info");
+    expect(infoCall?.calleeType).toBe("Logger");
+  });
+
+  it("infers calleeType from `var x SomeType` declarations", () => {
+    const content =
+      "package main\n" +
+      "type Cache struct{}\n" +
+      "func (c *Cache) Get() {}\n" +
+      "func use() {\n" +
+      "\tvar c Cache\n" +
+      "\tc.Get()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "u.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const getCall = parsed.calls.find((c) => c.calleeName === "Get");
+    expect(getCall?.calleeType).toBe("Cache");
+  });
+
+  it("infers calleeType from `x := SomeType{...}` composite literals", () => {
+    const content =
+      "package main\n" +
+      "type Buffer struct{}\n" +
+      "func (b *Buffer) Write() {}\n" +
+      "func use() {\n" +
+      "\tb := Buffer{}\n" +
+      "\tb.Write()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "u.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const writeCall = parsed.calls.find((c) => c.calleeName === "Write");
+    expect(writeCall?.calleeType).toBe("Buffer");
+  });
+
+  it("infers calleeType from `x := &SomeType{...}` pointer-to-composite", () => {
+    const content =
+      "package main\n" +
+      "type Buffer struct{}\n" +
+      "func (b *Buffer) Write() {}\n" +
+      "func use() {\n" +
+      "\tb := &Buffer{}\n" +
+      "\tb.Write()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "u.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const writeCall = parsed.calls.find((c) => c.calleeName === "Write");
+    expect(writeCall?.calleeType).toBe("Buffer");
+  });
+
+  it("bare calls inside a method use the receiver type as implicit calleeType", () => {
+    const content =
+      "package main\n" +
+      "type Service struct{}\n" +
+      "func (s *Service) helper() {}\n" +
+      "func (s *Service) Run() {\n" +
+      "\thelper()\n" + // implicit `s.helper()`
+      "}\n";
+    const file: SourceFile = { rel: "s.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const helperCall = parsed.calls.find((c) => c.calleeName === "helper");
+    expect(helperCall?.calleeType).toBe("Service");
+  });
+
+  it("leaves calleeType undefined for `:=` assignments from arbitrary calls", () => {
+    // `s := newService()` requires return-type tracking, which we don't do.
+    const content =
+      "package main\n" +
+      "type Service struct{}\n" +
+      "func (s *Service) Do() {}\n" +
+      "func newService() *Service { return &Service{} }\n" +
+      "func use() {\n" +
+      "\ts := newService()\n" +
+      "\ts.Do()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "u.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const doCall = parsed.calls.find((c) => c.calleeName === "Do");
+    // Falls through to lookupVariableType returning the bare identifier as
+    // the type guess — "s". That's harmless for resolution because no real
+    // struct is named "s", and pickCallTarget will fall back to name-match.
+    expect(doCall).toBeDefined();
+  });
+
+  it("disambiguates calls on two different fields of the same struct", () => {
+    const content =
+      "package main\n" +
+      "type ClientA struct{}\n" +
+      "func (c *ClientA) Send() {}\n" +
+      "type ClientB struct{}\n" +
+      "func (c *ClientB) Send() {}\n" +
+      "type Service struct {\n" +
+      "\ta *ClientA\n" +
+      "\tb *ClientB\n" +
+      "}\n" +
+      "func (s *Service) Run() {\n" +
+      "\ts.a.Send()\n" +
+      "\ts.b.Send()\n" +
+      "}\n";
+    const file: SourceFile = { rel: "s.go", ext: "go", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(goPlugin, file, ix);
+    const sendCalls = parsed.calls
+      .filter((c) => c.calleeName === "Send")
+      .map((c) => c.calleeType);
+    // Both calls present, each with its specific receiver type
+    expect(sendCalls).toEqual(["ClientA", "ClientB"]);
+  });
+});

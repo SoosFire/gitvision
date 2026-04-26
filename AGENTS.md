@@ -8,7 +8,7 @@ Welcome. This file is the primary context you need to work effectively on GitVis
 
 1. **Read `PROGRESS.md`** — 300+ lines of current state, design decisions, signal catalog, and the next-steps menu. You can't plan meaningful work without it.
 2. **Run `git log -10 --oneline`** — the last ten commits usually explain what changed most recently and why.
-3. **Run `npm run test:run`** — confirm the 236-test suite is green before you start. If red on a fresh checkout, fix that first; don't build on a broken baseline.
+3. **Run `npm run test:run`** — confirm the 246-test suite is green before you start. If red on a fresh checkout, fix that first; don't build on a broken baseline.
 4. **Greet the user in Danish.** See "Who you're working with" below.
 5. **Ask what they want to work on** before suggesting. They often have context you don't. Default to proposing from the `PROGRESS.md` roadmap if they're open.
 
