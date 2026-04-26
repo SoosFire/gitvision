@@ -1,43 +1,47 @@
-// Java plugin — third migration off the regex-fallback.
+// Java plugin — third migration off the regex-fallback, type-aware since v0.15.
 //
-// Java's module model is heavier than Python or Go: every file declares its
-// package via `package com.foo.bar;` and the class name = file basename
-// (Java convention; the public class always matches the filename). Imports
-// reference fully-qualified names (FQN) like `com.foo.bar.Baz`, optionally
-// with a `.*` wildcard that pulls every public class from the package.
+// What this plugin does that javascript.ts / python.ts / go.ts don't (yet):
+//   1. Tracks variable types in scope while walking the AST (class fields,
+//      method parameters, local variable declarations).
+//   2. Resolves call receivers to a static type when possible — for
+//      `validatePassword.validate(...)`, the receiver `validatePassword` has
+//      a known type `ValidatePassword`, so the call gets `calleeType` set.
+//   3. Emits FunctionDef.containerType for every method (the enclosing class
+//      name).
 //
-// Strategy:
-//   - prepareForRepo walks every .java file once (regex on the package
-//     declaration — cheap, the line is at the top of the file) and builds
-//     two maps: FQN→path for class lookups, package→[paths] for wildcards.
-//   - resolveImport tries FQN first, then treats the FQN as a package name
-//     for wildcards (returning the alphabetically-first file as a stable
-//     blast-radius anchor).
-//   - Tree-sitter queries cover method + constructor declarations, method
-//     invocations + object_creation_expression (new Foo() is a real
-//     "calls Foo's constructor" relationship), and standard McCabe
-//     decision points.
+// Why this matters: codeGraph.pickCallTarget uses calleeType + containerType
+// as the primary disambiguator. Without it, a call to `validate()` ambiguous
+// between 7 ValidateXxx classes would be picked by file order — wrong half
+// the time. With it, we deterministically resolve to ValidatePassword's
+// validate.
 //
-// What we deliberately don't do in v1:
-//   - extends / implements as separate edge kinds (graph.ts emits these as
-//     "extends"/"implements" kinds for the Imports tab; we'd need plugin-
-//     contract changes to differentiate kinds at the codeAnalysis level).
-//     Imports cover most cross-file dependencies anyway — you can't extend
-//     a class without first importing it.
-//   - Multi-class-per-file resolution beyond the public class. Java allows
-//     secondary classes but they're rarely referenced cross-file by FQN.
-//   - module-info.java parsing for Java 9+ modules. Most repos still use
-//     classic package layout.
+// Implementation note: this plugin uses the parseDirect path instead of the
+// standard tree-sitter pipeline because type tracking needs ordered AST
+// traversal (we maintain a scope stack). Queries can find call sites but
+// can't tell us "which variable's type is this call's receiver" without
+// walking the tree ourselves.
 
 import path from "node:path";
-import type { Language } from "web-tree-sitter";
-import type { CodeAnalysisPlugin, FileIndex, PluginQueries } from "../types";
+import { Parser } from "web-tree-sitter";
+import type { Language, Node as TsNode } from "web-tree-sitter";
+import type {
+  CodeAnalysisPlugin,
+  FileIndex,
+  ParsedCall,
+  ParsedFile,
+  ParsedFunction,
+  ParsedImport,
+  PluginQueries,
+  SourceFile,
+} from "../types";
 import { loadBuiltinGrammar } from "../runtime";
 
 const PLUGIN_NAME = "java";
 const EXTENSIONS = ["java"] as const;
 
 let lang: Language | null = null;
+
+// ------------------- Module-level resolver context -------------------
 
 interface JavaResolverContext {
   /** FQN ("com.foo.Bar") → repo-rel path. Built from package declarations
@@ -52,85 +56,14 @@ interface JavaResolverContext {
 // whitespace and comments — Java's grammar permits both before `package`.
 const PACKAGE_RE = /^\s*package\s+([a-zA-Z0-9_.]+)\s*;/m;
 
-// ------------------- Tree-sitter queries -------------------
-
-/** Captures the import path. tree-sitter-java represents
- *    import com.foo.Bar;     → import_declaration with scoped_identifier "com.foo.Bar"
- *    import com.foo.*;       → import_declaration with scoped_identifier "com.foo" + asterisk
- *    import static X.Y.z;    → import_declaration with `static` modifier
- *  We capture the scoped_identifier in all cases. resolveJavaImport tries
- *  it as a class FQN first, falls back to treating it as a package name
- *  (which catches wildcards naturally). */
-const IMPORTS_QUERY = `
-(import_declaration (scoped_identifier) @spec)
-`;
-
-/** Method and constructor declarations. constructor_body has a different
- *  node type from regular method bodies, so we need two patterns. Both
- *  fields use `name: (identifier)` for the function name. */
-const FUNCTION_DEFS_QUERY = `
-(method_declaration name: (identifier) @name body: (block) @body)
-(constructor_declaration name: (identifier) @name body: (constructor_body) @body)
-`;
-
-/** Three call shapes:
- *    foo()                — method_invocation with bare identifier name
- *    obj.method() / Class.staticMethod() — method_invocation with object
- *    new Foo(...)         — object_creation_expression with type_identifier
- *    new Foo<T>(...)      — object_creation_expression with generic_type
- *                            wrapping the type_identifier
- *  Modern Java uses generics heavily so the generic case is common. */
-const CALL_SITES_QUERY = `
-(method_invocation name: (identifier) @callee)
-(object_creation_expression type: (type_identifier) @callee)
-(object_creation_expression type: (generic_type (type_identifier) @callee))
-`;
-
-/** McCabe decision points for Java. Notes:
- *  - if/while/for/do_statement covers C-style loops; enhanced_for_statement
- *    is the for-each loop (`for (T x : xs)`)
- *  - switch_label fires once per `case X:` or `default:`. We exclude
- *    default via a #match? predicate to match the JS plugin convention
- *    of "case but not default"
- *  - catch_clause is one branch per exception handler (try itself isn't
- *    a branch — the no-exception path is the "default")
- *  - binary_expression with && / || (Java has no nullish-coalescing)
- *  - ternary_expression (Java's `cond ? a : b`)
- */
-const DECISION_POINTS_QUERY = `
-(if_statement) @p
-(while_statement) @p
-(for_statement) @p
-(enhanced_for_statement) @p
-(do_statement) @p
-((switch_label) @p (#match? @p "^case"))
-(catch_clause) @p
-(binary_expression operator: "&&") @p
-(binary_expression operator: "||") @p
-(ternary_expression) @p
-`;
-
-const QUERIES: PluginQueries = {
-  imports: IMPORTS_QUERY,
-  functionDefs: FUNCTION_DEFS_QUERY,
-  callSites: CALL_SITES_QUERY,
-  decisionPoints: DECISION_POINTS_QUERY,
-};
-
 // ------------------- Index construction -------------------
 
-/** Build FQN→path and package→members maps from the .java files in the
- *  FileIndex. Pure regex on the package declaration — fast even on large
- *  repos because we only read the first ~200 bytes of each file's content
- *  (the package line is always near the top). */
 function buildJavaContext(ix: FileIndex): JavaResolverContext {
   const fqnToPath = new Map<string, string>();
   const packageMembers = new Map<string, string[]>();
 
   for (const f of ix.byPath.values()) {
     if (f.ext !== "java") continue;
-    // Sample only the head of the file — package declaration must be at
-    // the top, after optional comments. 2KB is plenty.
     const head = f.content.slice(0, 2048);
     const m = PACKAGE_RE.exec(head);
     const pkg = m?.[1] ?? null;
@@ -147,7 +80,6 @@ function buildJavaContext(ix: FileIndex): JavaResolverContext {
     }
   }
 
-  // Sort each package member list for deterministic wildcard resolution.
   for (const arr of packageMembers.values()) arr.sort();
 
   return { fqnToPath, packageMembers };
@@ -162,21 +94,398 @@ function resolveJavaImport(
 ): string | null {
   const ctx = ix.extras.get(PLUGIN_NAME) as JavaResolverContext | undefined;
   if (!ctx) return null;
-
-  // 1. Direct FQN match — `import com.foo.Bar;`
   const direct = ctx.fqnToPath.get(spec);
   if (direct) return direct;
-
-  // 2. Treat as package — covers wildcard imports (`import com.foo.*;` →
-  //    spec is "com.foo") and also static imports of static members from
-  //    a package (rare but tolerated). Returns the alphabetically-first
-  //    member of the package as a stable anchor for blast-radius.
   const members = ctx.packageMembers.get(spec);
-  if (members && members.length > 0) {
-    return members[0];
+  if (members && members.length > 0) return members[0];
+  return null;
+}
+
+// ------------------- Tree-sitter queries (kept for reference + tests) -------------------
+//
+// These are no longer used by parseDirect — we walk the AST manually for type
+// tracking. They're retained as documentation of what the queries WOULD look
+// like, and are still exposed via queriesFor() so the plugin contract stays
+// satisfied for any caller that uses the standard pipeline.
+
+const QUERIES: PluginQueries = {
+  imports: `(import_declaration (scoped_identifier) @spec)`,
+  functionDefs: `
+    (method_declaration name: (identifier) @name body: (block) @body)
+    (constructor_declaration name: (identifier) @name body: (constructor_body) @body)
+  `,
+  callSites: `
+    (method_invocation name: (identifier) @callee)
+    (object_creation_expression type: (type_identifier) @callee)
+    (object_creation_expression type: (generic_type (type_identifier) @callee))
+  `,
+  decisionPoints: `
+    (if_statement) @p
+    (while_statement) @p
+    (for_statement) @p
+    (enhanced_for_statement) @p
+    (do_statement) @p
+    ((switch_label) @p (#match? @p "^case"))
+    (catch_clause) @p
+    (binary_expression operator: "&&") @p
+    (binary_expression operator: "||") @p
+    (ternary_expression) @p
+  `,
+};
+
+// ------------------- Type extraction -------------------
+
+/** Extract a type name (just the bare class name) from a Java type AST node.
+ *  Returns null for primitives, arrays, and types we can't statically resolve.
+ *  We deliberately strip generics ("List<String>" → "List") because our type
+ *  index is keyed by class name, not parameterized type. */
+function extractTypeName(node: TsNode): string | null {
+  switch (node.type) {
+    case "type_identifier":
+      return node.text;
+    case "generic_type": {
+      // generic_type's first named child is the base type (type_identifier
+      // or scoped_type_identifier)
+      for (const child of node.namedChildren) {
+        if (
+          child.type === "type_identifier" ||
+          child.type === "scoped_type_identifier"
+        ) {
+          return extractTypeName(child);
+        }
+      }
+      return null;
+    }
+    case "scoped_type_identifier": {
+      // "java.util.Map.Entry" → "Entry" (last segment). Type tracking against
+      // qualified names is rare in practice and the bare class name matches
+      // our FQN→path index just as well.
+      const parts = node.text.split(".");
+      return parts[parts.length - 1] ?? null;
+    }
+    // Arrays + primitives + void → null (no methods we can resolve to in our
+    // FunctionDef index)
+    default:
+      return null;
+  }
+}
+
+/** Walk class body for field declarations, return name→type map. */
+function collectFieldTypes(classBody: TsNode): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const child of classBody.namedChildren) {
+    if (child.type !== "field_declaration") continue;
+    const typeNode = child.childForFieldName("type");
+    if (!typeNode) continue;
+    const typeName = extractTypeName(typeNode);
+    if (!typeName) continue;
+    // field_declaration may have multiple variable_declarator children for
+    // forms like `int a, b, c;` — collect each name with the same type.
+    for (const sub of child.namedChildren) {
+      if (sub.type !== "variable_declarator") continue;
+      const nameNode = sub.childForFieldName("name");
+      if (nameNode?.text) out.set(nameNode.text, typeName);
+    }
+  }
+  return out;
+}
+
+/** Walk a method's formal_parameters, return name→type map. */
+function collectParamTypes(methodNode: TsNode): Map<string, string> {
+  const out = new Map<string, string>();
+  const params = methodNode.childForFieldName("parameters");
+  if (!params) return out;
+  for (const p of params.namedChildren) {
+    if (p.type !== "formal_parameter" && p.type !== "spread_parameter") continue;
+    const typeNode = p.childForFieldName("type");
+    const nameNode = p.childForFieldName("name");
+    if (!typeNode || !nameNode) continue;
+    const typeName = extractTypeName(typeNode);
+    if (typeName) out.set(nameNode.text, typeName);
+  }
+  return out;
+}
+
+// ------------------- parseDirect: AST walk with type tracking -------------------
+
+interface MethodScope {
+  name: string;
+  /** Local variables (including parameters) → type. Pushed by the param
+   *  collector; extended as we encounter local_variable_declaration nodes. */
+  locals: Map<string, string>;
+  /** McCabe decision points encountered inside this method's body. */
+  decisionPoints: number;
+}
+
+interface ClassScope {
+  name: string;
+  fields: Map<string, string>;
+}
+
+function parseJavaDirect(file: SourceFile, _ix: FileIndex): ParsedFile {
+  if (!lang) {
+    throw new Error("java plugin not loaded — call plugin.load() first");
+  }
+  const parser = new Parser();
+  parser.setLanguage(lang);
+  const tree = parser.parse(file.content);
+  if (!tree) {
+    parser.delete();
+    return errorParsedFile(file);
   }
 
-  return null;
+  const imports: ParsedImport[] = [];
+  const functions: ParsedFunction[] = [];
+  const calls: ParsedCall[] = [];
+  let totalDecisionPoints = 0;
+
+  const seenImportSpecs = new Set<string>();
+  const classStack: ClassScope[] = [];
+  const methodStack: MethodScope[] = [];
+
+  function currentClass(): ClassScope | null {
+    return classStack[classStack.length - 1] ?? null;
+  }
+  function currentMethod(): MethodScope | null {
+    return methodStack[methodStack.length - 1] ?? null;
+  }
+
+  /** Look up a variable's type in the current scope, walking outwards from
+   *  innermost method through class fields. */
+  function lookupVariableType(name: string): string | null {
+    for (let i = methodStack.length - 1; i >= 0; i--) {
+      const t = methodStack[i].locals.get(name);
+      if (t) return t;
+    }
+    const cls = currentClass();
+    if (cls) {
+      const t = cls.fields.get(name);
+      if (t) return t;
+    }
+    return null;
+  }
+
+  /** Bumps both the file-total counter and the innermost method's local
+   *  counter (for per-function complexity). */
+  function countDecisionPoint() {
+    totalDecisionPoints++;
+    const m = currentMethod();
+    if (m) m.decisionPoints++;
+  }
+
+  /** Resolve the calleeType for a method_invocation given its receiver
+   *  (`object` field). Returns the type when statically inferable. */
+  function resolveCalleeType(objectNode: TsNode | null): string | undefined {
+    const cls = currentClass();
+    // Bare call: `helper()` → implicit `this`, type = current class
+    if (!objectNode) return cls?.name ?? undefined;
+
+    switch (objectNode.type) {
+      case "this":
+        return cls?.name ?? undefined;
+      case "super": {
+        // We don't track inheritance edges yet — leave undefined. Java's
+        // call resolver will fall back to name-match for super.method() calls.
+        return undefined;
+      }
+      case "identifier": {
+        // Could be a variable in scope OR a class name (for static calls).
+        const t = lookupVariableType(objectNode.text);
+        if (t) return t;
+        // Treat the bare identifier itself as a possible class name. This
+        // catches `Math.max(...)` where Math isn't a variable. The candidate
+        // disambiguator will succeed when there's a class with that name in
+        // our function index.
+        return objectNode.text;
+      }
+      case "field_access": {
+        // `this.field.method()` — field is on the current class
+        const objField = objectNode.childForFieldName("object");
+        const fieldName = objectNode.childForFieldName("field")?.text;
+        if (!fieldName) return undefined;
+        if (objField?.type === "this") {
+          return cls?.fields.get(fieldName);
+        }
+        // Other shapes (chained, etc.) — out of scope
+        return undefined;
+      }
+      // method_invocation, parenthesized_expression, etc. — we'd need return-
+      // type tracking. Skip in v1.
+      default:
+        return undefined;
+    }
+  }
+
+  function visit(node: TsNode) {
+    switch (node.type) {
+      case "import_declaration": {
+        // Find the scoped_identifier child — it's not a field on
+        // import_declaration, just a child node.
+        let spec: string | null = null;
+        for (const child of node.namedChildren) {
+          if (child.type === "scoped_identifier") {
+            spec = child.text;
+            break;
+          }
+        }
+        if (spec && !seenImportSpecs.has(spec)) {
+          seenImportSpecs.add(spec);
+          imports.push({
+            rawSpec: spec,
+            resolvedPath: resolveJavaImport(spec, file.rel, _ix),
+          });
+        }
+        return; // imports have no nested calls/decisions worth visiting
+      }
+
+      case "class_declaration":
+      case "interface_declaration":
+      case "enum_declaration":
+      case "record_declaration": {
+        const nameNode = node.childForFieldName("name");
+        const className = nameNode?.text ?? "<anon>";
+        const bodyNode = node.childForFieldName("body");
+        const fields = bodyNode
+          ? collectFieldTypes(bodyNode)
+          : new Map<string, string>();
+        classStack.push({ name: className, fields });
+        // Walk body so nested methods/classes get visited
+        if (bodyNode) {
+          for (const child of bodyNode.namedChildren) visit(child);
+        }
+        classStack.pop();
+        return;
+      }
+
+      case "method_declaration":
+      case "constructor_declaration": {
+        const nameNode = node.childForFieldName("name");
+        const fnName = nameNode?.text ?? "<anon>";
+        const startRow = node.startPosition.row;
+        const endRow = node.endPosition.row;
+        const params = collectParamTypes(node);
+        const locals = new Map(params); // params are visible like locals
+        methodStack.push({ name: fnName, locals, decisionPoints: 0 });
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.namedChildren) visit(child);
+        }
+        const ms = methodStack.pop()!;
+        functions.push({
+          name: fnName,
+          startRow,
+          endRow,
+          complexity: 1 + ms.decisionPoints,
+          containerType: currentClass()?.name,
+        });
+        return;
+      }
+
+      case "local_variable_declaration": {
+        const typeNode = node.childForFieldName("type");
+        const typeName = typeNode ? extractTypeName(typeNode) : null;
+        if (typeName) {
+          const m = currentMethod();
+          if (m) {
+            for (const sub of node.namedChildren) {
+              if (sub.type !== "variable_declarator") continue;
+              const varName = sub.childForFieldName("name")?.text;
+              if (varName) m.locals.set(varName, typeName);
+            }
+          }
+        }
+        // Continue visiting — initializers may contain calls / decisions
+        for (const child of node.namedChildren) visit(child);
+        return;
+      }
+
+      case "method_invocation": {
+        const nameNode = node.childForFieldName("name");
+        const calleeName = nameNode?.text;
+        if (calleeName) {
+          const objectNode = node.childForFieldName("object");
+          calls.push({
+            calleeName,
+            inFunction: currentMethod()?.name ?? null,
+            calleeType: resolveCalleeType(objectNode),
+          });
+        }
+        for (const child of node.namedChildren) visit(child);
+        return;
+      }
+
+      case "object_creation_expression": {
+        // `new Foo()` / `new Foo<>()` — calleeName is the class itself.
+        // calleeType = same class (you're calling its constructor).
+        const typeNode = node.childForFieldName("type");
+        if (typeNode) {
+          const typeName = extractTypeName(typeNode);
+          if (typeName) {
+            calls.push({
+              calleeName: typeName,
+              inFunction: currentMethod()?.name ?? null,
+              calleeType: typeName,
+            });
+          }
+        }
+        for (const child of node.namedChildren) visit(child);
+        return;
+      }
+
+      case "if_statement":
+      case "while_statement":
+      case "for_statement":
+      case "enhanced_for_statement":
+      case "do_statement":
+      case "catch_clause":
+      case "ternary_expression":
+        countDecisionPoint();
+        for (const child of node.namedChildren) visit(child);
+        return;
+
+      case "switch_label": {
+        // Count `case X:` clauses but not `default:` — matches the JS plugin's
+        // McCabe convention.
+        if (node.text.startsWith("case")) countDecisionPoint();
+        return;
+      }
+
+      case "binary_expression": {
+        const op = node.childForFieldName("operator")?.text;
+        if (op === "&&" || op === "||") countDecisionPoint();
+        for (const child of node.namedChildren) visit(child);
+        return;
+      }
+
+      default:
+        for (const child of node.namedChildren) visit(child);
+    }
+  }
+
+  visit(tree.rootNode);
+
+  tree.delete();
+  parser.delete();
+
+  return {
+    rel: file.rel,
+    imports,
+    functions,
+    calls,
+    fileComplexity: 1 + totalDecisionPoints,
+    parseError: false,
+  };
+}
+
+function errorParsedFile(file: SourceFile): ParsedFile {
+  return {
+    rel: file.rel,
+    imports: [],
+    functions: [],
+    calls: [],
+    fileComplexity: 1,
+    parseError: true,
+  };
 }
 
 // ------------------- Plugin -------------------
@@ -194,6 +503,8 @@ export const javaPlugin = {
     ix.extras.set(PLUGIN_NAME, buildJavaContext(ix));
   },
 
+  // languageFor + queriesFor are kept defined for any consumer that wants to
+  // inspect them (e.g. tests), but the orchestrator routes through parseDirect.
   languageFor(_ext) {
     if (!lang) {
       throw new Error(
@@ -206,6 +517,8 @@ export const javaPlugin = {
   queriesFor(_ext): PluginQueries {
     return QUERIES;
   },
+
+  parseDirect: parseJavaDirect,
 
   resolveImport: resolveJavaImport,
 } satisfies CodeAnalysisPlugin;

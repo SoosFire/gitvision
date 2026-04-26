@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.14, end of session 4)
+## Current state (v0.15, end of session 4)
 
 ### What works end-to-end
 
@@ -120,11 +120,13 @@ lib/codeAnalysis/
     ├── go.ts               Tree-sitter (.go) — same coverage. Migrated
     │                       in v0.13. prepareForRepo reads go.mod for
     │                       module-prefix-aware import resolution.
-    ├── java.ts             Tree-sitter (.java) — same coverage. Migrated
-    │                       in v0.14. prepareForRepo regex-scans every
-    │                       file's `package` declaration to build FQN→path
-    │                       and package→members maps for resolveImport.
-    │                       Captures method + constructor + object_creation.
+    ├── java.ts             Tree-sitter (.java) — same coverage as
+    │                       javascript.ts PLUS type-aware call resolution
+    │                       since v0.15. Uses parseDirect with manual AST
+    │                       walk to track field types, parameter types,
+    │                       and local variable types in scope; resolves
+    │                       receiver types on every method_invocation.
+    │                       Methods get containerType (their owning class).
     └── regexFallback.ts    Wraps lib/graph.ts's per-language regex parsers
                             (Kotlin, C#, PHP, Ruby + HTML/CSS as passive).
                             Imports-only — no functions/calls/complexity
@@ -292,7 +294,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**225 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.14 added `java.test.ts` (12 tests) covering grammar load, prepareForRepo building FQN + package indexes, direct + wildcard + external resolution, default-package handling, method + constructor extraction, generic-type object_creation calls (`new ArrayList<>()`), and the McCabe count on a hand-crafted branchy method.
+**236 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.15 added 11 new tests: 9 in `java.test.ts` covering containerType extraction, calleeType inference from fields / parameters / local variables, generic-type stripping (List<String> → List), `this.method()` and bare-call resolution to current class, multi-validator disambiguation in the same class, and graceful undefined for un-inferable receivers; plus 2 in `codeGraph.test.ts` exercising type-aware pickCallTarget against the validator scenario.
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -351,12 +353,22 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.12 — Python migrated to its own tree-sitter plugin. Live impact on django/django: 0 → **31,894 functions, 183,798 calls** with full per-function complexity. Top-complex surfaces real Django hotspots like `_alter_field @ 91` (schema migrations) and `__new__ @ 62` (model metaclass).
 - ✅ v0.13 — Go migrated to its own tree-sitter plugin. `prepareForRepo` reads `go.mod` for module-prefix-aware import resolution, with a suffix-match heuristic as fallback. Live impact across four repos: gin (1,311 fns), cobra (589), testify (1,519), terraform (16,930). Top-complex surfaces gin's radix-tree router internals, cobra's shell completion, testify's `compare`, terraform's `backendFromConfig`.
 - ✅ v0.14 — Java migrated to its own tree-sitter plugin. `prepareForRepo` regex-scans `package` declarations across the FileIndex to build FQN→path + package→members maps; resolver tries direct FQN then falls back to package lookup (which catches wildcard imports). Live impact: spring-petclinic (165 fns), spring-boot (30,116 fns at the 5,000-file cap), guava (56,485), jenkins (19,895). Captures method + constructor invocations + `new Foo<>()` object creation as call sites.
+- ✅ v0.15 — **Phase 5a: type-aware call resolution for Java.** `ParsedFunction.containerType` + `ParsedCall.calleeType` (both optional) added to the plugin contract. The Java plugin switched to parseDirect + manual AST walk that tracks class field types, method parameter types, and local variable declarations in scope; resolves the receiver's type on every `obj.method()` call. `codeGraph.pickCallTarget` now uses calleeType + containerType as the primary disambiguator BEFORE falling back to same-file/imported-files. Live impact on the school Spring Boot project (RaceKatteKlubben): the 8 unresolved `validate()` calls dropped to 0; resolvedCalls 198→208. The unresolved list is now exclusively stdlib + Spring (JDBC ResultSet, Model, etc.) — no internal names left.
 
-### Next up: continue Tier 2 polish (when motivated, one file each)
+### Next up: continue Phase 5 (type-aware resolution for the other 3 typed langs)
 
-Each remaining language migration follows the exact pattern from v0.12-14
-— new plugin file, register in three places, shrink regexFallback's
-extension list, ship.
+The Phase 5 contract (containerType + calleeType) is in place; each remaining
+typed language's plugin needs the same internal upgrade.
+
+- **Phase 5b — Go**: receiver types from method_declaration; struct field types; explicit `var x Type` declarations. ~1-2 evenings, similar shape to Java.
+- **Phase 5c — TypeScript**: explicit type annotations on class fields, function parameters, `let x: Type`. Inferred types are out of scope — TS inference is too complex for our static walk. ~2 evenings for the typed subset (which is 80%+ of modern TS).
+- **Phase 5d — Python**: optional type hints (`def f(x: Foo)`). Untyped Python stays name-match — no inference attempted. ~1 evening.
+
+After Phase 5 is fully shipped, the resolver will be deterministic for
+typed languages — UI-visible blast radius accuracy goes from "good
+heuristic" to "structural truth" for any project that uses static types.
+
+### Then: continue migrating remaining regex-fallback languages
 
 - Migrate Kotlin — Java's lillebror; could share JVM-style FQN indexing logic.
 - Migrate C#, PHP, Ruby — in any order, ~1 evening each.
@@ -455,4 +467,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.14 — Java migrated to tree-sitter, third migration. Pattern now validated across four very different module systems: Python's relative dots, Go's go.mod-based prefix, Java's FQN-from-package + wildcards, and JS/TS's tsconfig-paths + workspaces. The plugin contract has held up cleanly throughout.).*
+*Last updated: end of session 4 (v0.15 — Phase 5a: type-aware call resolution for Java. ParsedCall.calleeType + FunctionDef.containerType added to the plugin contract; the Java plugin switched to parseDirect with manual AST walk that tracks types in scope. Validated against the school Spring Boot project: 8 unresolved validate() calls dropped to 0; ambiguous-name calls now resolve deterministically by static type).*

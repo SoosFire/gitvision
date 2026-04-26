@@ -289,3 +289,164 @@ describe("javaPlugin — parseFile end-to-end", () => {
     expect(innerCalls).toEqual(["util"]);
   });
 });
+
+describe("javaPlugin — type-aware tracking (v0.15)", () => {
+  beforeAll(async () => {
+    await javaPlugin.load();
+  });
+
+  it("emits containerType on every method matching the enclosing class", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Widget {\n" +
+      "  public Widget() {}\n" +
+      "  public int render() { return 0; }\n" +
+      "  public void update() {}\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Widget.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    for (const fn of parsed.functions) {
+      expect(fn.containerType).toBe("Widget");
+    }
+  });
+
+  it("infers calleeType from a field declaration with explicit type", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Service {\n" +
+      "  private ValidatePassword validatePassword;\n" +
+      "  public void run() {\n" +
+      "    validatePassword.validate(null);\n" +
+      "  }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Service.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const validateCall = parsed.calls.find((c) => c.calleeName === "validate");
+    expect(validateCall?.calleeType).toBe("ValidatePassword");
+  });
+
+  it("infers calleeType from a method parameter", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Service {\n" +
+      "  public void check(ValidateEmail v) {\n" +
+      "    v.validate(null);\n" +
+      "  }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Service.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const validateCall = parsed.calls.find((c) => c.calleeName === "validate");
+    expect(validateCall?.calleeType).toBe("ValidateEmail");
+  });
+
+  it("infers calleeType from a local variable with explicit type", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Service {\n" +
+      "  public void run() {\n" +
+      "    ValidateUserName v = new ValidateUserName();\n" +
+      "    v.validate(null);\n" +
+      "  }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Service.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const validateCall = parsed.calls.find((c) => c.calleeName === "validate");
+    expect(validateCall?.calleeType).toBe("ValidateUserName");
+  });
+
+  it("strips generics when extracting types (List<String> → List)", () => {
+    const content =
+      "package com.example;\n" +
+      "import java.util.List;\n" +
+      "public class S {\n" +
+      "  private List<String> items;\n" +
+      "  public void use() { items.size(); }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "S.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const sizeCall = parsed.calls.find((c) => c.calleeName === "size");
+    expect(sizeCall?.calleeType).toBe("List");
+  });
+
+  it("`this.method()` and bare `method()` resolve to current class", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Owner {\n" +
+      "  public void publicApi() {\n" +
+      "    helper();\n" +
+      "    this.alsoHelper();\n" +
+      "  }\n" +
+      "  void helper() {}\n" +
+      "  void alsoHelper() {}\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Owner.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const helperCall = parsed.calls.find((c) => c.calleeName === "helper");
+    const alsoHelperCall = parsed.calls.find(
+      (c) => c.calleeName === "alsoHelper"
+    );
+    expect(helperCall?.calleeType).toBe("Owner");
+    expect(alsoHelperCall?.calleeType).toBe("Owner");
+  });
+
+  it("disambiguates two same-named methods on different fields in the same class", () => {
+    const content =
+      "package com.example;\n" +
+      "public class Service {\n" +
+      "  private ValidatePassword vp;\n" +
+      "  private ValidateEmail ve;\n" +
+      "  public void run() {\n" +
+      "    vp.validate(null);\n" +
+      "    ve.validate(null);\n" +
+      "  }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "Service.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const validateCalls = parsed.calls
+      .filter((c) => c.calleeName === "validate")
+      .map((c) => c.calleeType);
+    // Each call's type matches the receiver's type — they don't collapse
+    expect(validateCalls).toEqual(["ValidatePassword", "ValidateEmail"]);
+  });
+
+  it("leaves calleeType undefined when the receiver type can't be inferred", () => {
+    const content =
+      "package com.example;\n" +
+      "public class S {\n" +
+      "  public void f() {\n" +
+      "    getThing().doStuff();\n" + // chained — return type not tracked
+      "  }\n" +
+      "  Object getThing() { return null; }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "S.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const doStuff = parsed.calls.find((c) => c.calleeName === "doStuff");
+    expect(doStuff?.calleeType).toBeUndefined();
+    // doesn't crash — and we still emit the call so the name-based fallback
+    // in pickCallTarget can try
+    expect(doStuff).toBeDefined();
+  });
+
+  it("constructor calls (new Foo()) emit calleeType = the class itself", () => {
+    const content =
+      "package com.example;\n" +
+      "public class S {\n" +
+      "  public void f() {\n" +
+      "    Widget w = new Widget();\n" +
+      "  }\n" +
+      "}\n";
+    const file: SourceFile = { rel: "S.java", ext: "java", content };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javaPlugin, file, ix);
+    const widgetNew = parsed.calls.find((c) => c.calleeName === "Widget");
+    expect(widgetNew?.calleeType).toBe("Widget");
+  });
+});

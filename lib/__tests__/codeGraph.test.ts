@@ -151,6 +151,122 @@ describe("buildCodeGraph", () => {
     expect(edge.calleeName).toBe("shared");
   });
 
+  it("type-aware: matches calleeType against containerType before name fallback (v0.15)", () => {
+    // The Java validator scenario: 7 ValidateXxx classes each with a
+    // validate() method. Without type-aware resolution, a `vp.validate()`
+    // call would pick whichever validator file was iterated first. With
+    // calleeType + containerType the match is deterministic.
+    const files = [
+      pf({
+        rel: "ValidatePassword.java",
+        functions: [
+          {
+            name: "validate",
+            startRow: 1,
+            endRow: 10,
+            complexity: 5,
+            containerType: "ValidatePassword",
+          },
+        ],
+      }),
+      pf({
+        rel: "ValidateEmail.java",
+        functions: [
+          {
+            name: "validate",
+            startRow: 1,
+            endRow: 10,
+            complexity: 4,
+            containerType: "ValidateEmail",
+          },
+        ],
+      }),
+      pf({
+        rel: "ValidateUserName.java",
+        functions: [
+          {
+            name: "validate",
+            startRow: 1,
+            endRow: 10,
+            complexity: 3,
+            containerType: "ValidateUserName",
+          },
+        ],
+      }),
+      pf({
+        rel: "Service.java",
+        // Two calls to "validate" with DIFFERENT calleeTypes — both should
+        // resolve correctly (no first-wins collapse).
+        calls: [
+          {
+            calleeName: "validate",
+            inFunction: "run",
+            calleeType: "ValidateEmail",
+          },
+          {
+            calleeName: "validate",
+            inFunction: "run",
+            calleeType: "ValidateUserName",
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls).toHaveLength(2);
+    const resolutions = g.calls.map((c) => c.toFile).sort();
+    expect(resolutions).toEqual([
+      "ValidateEmail.java",
+      "ValidateUserName.java",
+    ]);
+  });
+
+  it("type-aware match overrides same-file fallback when calleeType is set", () => {
+    // Edge case: a same-file shadow plus an external typed candidate. The
+    // typed match wins because it's a stronger signal than file proximity.
+    const files = [
+      pf({
+        rel: "External.java",
+        functions: [
+          {
+            name: "doIt",
+            startRow: 1,
+            endRow: 3,
+            complexity: 1,
+            containerType: "External",
+          },
+        ],
+      }),
+      pf({
+        rel: "Local.java",
+        functions: [
+          {
+            name: "doIt",
+            startRow: 5,
+            endRow: 7,
+            complexity: 1,
+            containerType: "Local",
+          },
+        ],
+        calls: [
+          {
+            calleeName: "doIt",
+            inFunction: "caller",
+            calleeType: "External",
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls[0].toFile).toBe("External.java");
+    expect(g.calls[0].toFunction).toBe("doIt");
+  });
+
   it("emits import edges only for resolved targets and dedupes by (kind, from, to)", () => {
     const files = [
       pf({

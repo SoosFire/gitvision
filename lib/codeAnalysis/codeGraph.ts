@@ -31,7 +31,7 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
 
   // 1. Global function index for call resolution. Same-named functions in
   //    different files are common, so we keep the full list per name and
-  //    resolve disambiguation later via import context.
+  //    resolve disambiguation later via import context + containerType.
   const funcsByName = new Map<string, FunctionDef[]>();
   const functions: FunctionDef[] = [];
   for (const f of parsedFiles) {
@@ -42,6 +42,7 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
         startRow: fn.startRow,
         endRow: fn.endRow,
         complexity: fn.complexity,
+        containerType: fn.containerType,
       };
       functions.push(def);
       const arr = funcsByName.get(fn.name) ?? [];
@@ -63,12 +64,20 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
   }
 
   // 3. Resolve each call, producing a CallEdge whose toFile/toFunction is
-  //    populated when we can determine the target unambiguously.
+  //    populated when we can determine the target unambiguously. When the
+  //    plugin gave us a calleeType (Java's type-aware extractor in v0.15),
+  //    we prefer candidates whose containerType matches — that's the
+  //    deterministic answer when receiver type is known.
   const calls: CallEdge[] = [];
   for (const f of parsedFiles) {
     for (const c of f.calls) {
       const candidates = funcsByName.get(c.calleeName) ?? [];
-      const target = pickCallTarget(f.rel, candidates, importsByFile);
+      const target = pickCallTarget(
+        f.rel,
+        c.calleeType,
+        candidates,
+        importsByFile
+      );
       calls.push({
         fromFile: f.rel,
         fromFunction: c.inFunction,
@@ -135,22 +144,38 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
 }
 
 /** Pick the best target for a call given the candidate function definitions
- *  with that name. Strategy:
- *    1. If there's exactly one candidate, take it.
- *    2. If multiple, prefer one in the same file as the caller.
- *    3. If multiple, prefer one in a file imported by the caller.
- *    4. Otherwise leave unresolved — better than guessing wrong. */
+ *  with that name. Strategy (highest-precedence first):
+ *    1. Exactly one candidate → take it.
+ *    2. Type-aware: when the plugin supplied calleeType, prefer the
+ *       candidate whose containerType matches. This is the deterministic
+ *       answer for typed languages — `validatePassword.validate()` resolves
+ *       to ValidatePassword.validate even when 6 other classes also have
+ *       a `validate()` method.
+ *    3. Same-file: prefer a same-file definition (handles intra-file
+ *       helpers + recursive calls).
+ *    4. Imported-file fallback: prefer a candidate the caller imports.
+ *    5. Otherwise leave unresolved — better than guessing wrong. */
 function pickCallTarget(
   fromFile: string,
+  calleeType: string | undefined,
   candidates: FunctionDef[],
   importsByFile: Map<string, Set<string>>
 ): FunctionDef | null {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];
 
+  // 2. Type-aware match. Only fires when both sides have type info — a
+  //    plugin without type tracking falls through to the old heuristics.
+  if (calleeType) {
+    const typed = candidates.find((c) => c.containerType === calleeType);
+    if (typed) return typed;
+  }
+
+  // 3. Same-file fallback
   const sameFile = candidates.find((c) => c.filePath === fromFile);
   if (sameFile) return sameFile;
 
+  // 4. Imported-file fallback
   const importedFiles = importsByFile.get(fromFile);
   if (importedFiles) {
     const imported = candidates.find((c) => importedFiles.has(c.filePath));

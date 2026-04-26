@@ -69,12 +69,25 @@ export interface ParsedFunction {
   startRow: number;
   endRow: number;
   complexity: number;
+  /** When the plugin can identify the class/struct/etc. this function
+   *  belongs to. Java methods know their class; Go methods know their
+   *  receiver type; Python methods know their class. Top-level / module-
+   *  scope functions leave this undefined. Drives type-aware call
+   *  resolution in buildCodeGraph (Phase 5+). */
+  containerType?: string;
 }
 
 export interface ParsedCall {
   calleeName: string;
   /** Name of the enclosing function/method. null for module-scope calls. */
   inFunction: string | null;
+  /** When the plugin can statically infer the type of the call's receiver.
+   *  E.g. for `validatePassword.validate(...)`, this is "ValidatePassword"
+   *  if `validatePassword` was declared as that type in scope. Drives
+   *  type-aware disambiguation between same-named methods in different
+   *  classes (Phase 5+). Undefined when not inferable (dynamic types,
+   *  complex expressions, etc.). */
+  calleeType?: string;
 }
 
 export interface ParsedFile {
@@ -146,6 +159,10 @@ export interface FunctionDef {
   startRow: number;
   endRow: number;
   complexity: number;
+  /** Mirrors ParsedFunction.containerType. The class/struct/etc. this
+   *  function belongs to, when known. Used for type-aware call resolution
+   *  in pickCallTarget. */
+  containerType?: string;
 }
 
 /** A call edge — function X in file A calls callable Y, possibly resolved to
