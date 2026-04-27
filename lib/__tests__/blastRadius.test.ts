@@ -2,7 +2,10 @@
 // fixtures so we exercise BFS, hop sorting, cycle handling, and the caps.
 
 import { describe, it, expect } from "vitest";
-import { computeBlastRadius } from "../codeAnalysis/blastRadius";
+import {
+  computeBlastRadius,
+  computeFunctionBlastRadius,
+} from "../codeAnalysis/blastRadius";
 import type { CodeGraph } from "../codeAnalysis/types";
 
 function emptyCodeGraph(): CodeGraph {
@@ -178,5 +181,212 @@ describe("computeBlastRadius", () => {
       { filePath: "z.ts", hop: 1 },
       { filePath: "m.ts", hop: 2 },
     ]);
+  });
+});
+
+describe("computeFunctionBlastRadius", () => {
+  it("returns empty results for a function with no incoming/outgoing calls", () => {
+    const cg = emptyCodeGraph();
+    const b = computeFunctionBlastRadius(cg, "src/x.ts", "lonely");
+    expect(b.incoming).toEqual([]);
+    expect(b.outgoing).toEqual([]);
+    expect(b.target).toEqual({ filePath: "src/x.ts", name: "lonely" });
+  });
+
+  it("captures direct callers (incoming hop 1)", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "caller.ts",
+        fromFunction: "main",
+        calleeName: "doStuff",
+        toFile: "target.ts",
+        toFunction: "doStuff",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "target.ts", "doStuff");
+    expect(b.incoming).toEqual([
+      { filePath: "caller.ts", name: "main", hop: 1 },
+    ]);
+    expect(b.outgoing).toEqual([]);
+  });
+
+  it("captures direct callees (outgoing hop 1)", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "main.ts",
+        fromFunction: "run",
+        calleeName: "helper",
+        toFile: "lib.ts",
+        toFunction: "helper",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "main.ts", "run");
+    expect(b.outgoing).toEqual([
+      { filePath: "lib.ts", name: "helper", hop: 1 },
+    ]);
+    expect(b.incoming).toEqual([]);
+  });
+
+  it("traverses transitively across multiple hops", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      // page.handle → controller.dispatch → service.lookup → repo.find
+      {
+        fromFile: "page.ts",
+        fromFunction: "handle",
+        calleeName: "dispatch",
+        toFile: "controller.ts",
+        toFunction: "dispatch",
+      },
+      {
+        fromFile: "controller.ts",
+        fromFunction: "dispatch",
+        calleeName: "lookup",
+        toFile: "service.ts",
+        toFunction: "lookup",
+      },
+      {
+        fromFile: "service.ts",
+        fromFunction: "lookup",
+        calleeName: "find",
+        toFile: "repo.ts",
+        toFunction: "find",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "repo.ts", "find");
+    expect(b.incoming).toEqual([
+      { filePath: "service.ts", name: "lookup", hop: 1 },
+      { filePath: "controller.ts", name: "dispatch", hop: 2 },
+      { filePath: "page.ts", name: "handle", hop: 3 },
+    ]);
+    expect(b.byHop.incoming).toEqual({ 1: 1, 2: 1, 3: 1 });
+  });
+
+  it("ignores module-scope calls (fromFunction null) — no source-side fn id", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "init.ts",
+        fromFunction: null,
+        calleeName: "setup",
+        toFile: "target.ts",
+        toFunction: "setup",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "target.ts", "setup");
+    expect(b.incoming).toEqual([]);
+  });
+
+  it("ignores unresolved calls (toFile or toFunction null)", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "a.ts",
+        fromFunction: "x",
+        calleeName: "external",
+        toFile: null,
+        toFunction: null,
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "a.ts", "x");
+    expect(b.outgoing).toEqual([]);
+  });
+
+  it("disambiguates same-named functions across files", () => {
+    // Two different `parse` functions in different files. Blasting one
+    // shouldn't surface callers of the other.
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "json.ts",
+        fromFunction: "main",
+        calleeName: "parse",
+        toFile: "json.ts",
+        toFunction: "parse",
+      },
+      {
+        fromFile: "yaml.ts",
+        fromFunction: "main",
+        calleeName: "parse",
+        toFile: "yaml.ts",
+        toFunction: "parse",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "json.ts", "parse");
+    expect(b.incoming).toEqual([
+      { filePath: "json.ts", name: "main", hop: 1 },
+    ]);
+  });
+
+  it("handles function-level cycles without infinite looping", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      // x → y → x: closed cycle. BFS from x sees y once.
+      {
+        fromFile: "a.ts",
+        fromFunction: "x",
+        calleeName: "y",
+        toFile: "a.ts",
+        toFunction: "y",
+      },
+      {
+        fromFile: "a.ts",
+        fromFunction: "y",
+        calleeName: "x",
+        toFile: "a.ts",
+        toFunction: "x",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "a.ts", "x");
+    expect(b.outgoing).toEqual([
+      { filePath: "a.ts", name: "y", hop: 1 },
+    ]);
+  });
+
+  it("respects maxHops cap", () => {
+    const cg = emptyCodeGraph();
+    cg.calls = [
+      {
+        fromFile: "a.ts",
+        fromFunction: "x",
+        calleeName: "y",
+        toFile: "a.ts",
+        toFunction: "y",
+      },
+      {
+        fromFile: "a.ts",
+        fromFunction: "y",
+        calleeName: "z",
+        toFile: "a.ts",
+        toFunction: "z",
+      },
+      {
+        fromFile: "a.ts",
+        fromFunction: "z",
+        calleeName: "w",
+        toFile: "a.ts",
+        toFunction: "w",
+      },
+    ];
+    const b = computeFunctionBlastRadius(cg, "a.ts", "x", { maxHops: 2 });
+    expect(b.outgoing.map((e) => e.name)).toEqual(["y", "z"]);
+  });
+
+  it("flags truncated when nodes cap is hit, with a 'functions' unit message", () => {
+    const cg = emptyCodeGraph();
+    for (let i = 0; i < 30; i++) {
+      cg.calls.push({
+        fromFile: `caller${i}.ts`,
+        fromFunction: "f",
+        calleeName: "target",
+        toFile: "t.ts",
+        toFunction: "target",
+      });
+    }
+    const b = computeFunctionBlastRadius(cg, "t.ts", "target", { maxNodes: 10 });
+    expect(b.incoming.length).toBe(10);
+    expect(b.truncated).toMatch(/Capped at 10 functions/);
   });
 });

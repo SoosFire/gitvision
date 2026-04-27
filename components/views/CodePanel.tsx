@@ -2,10 +2,17 @@
 
 // Code tab — surfaces the v0.10 codeAnalysis pipeline output.
 //
-// Hero view is blast radius for a selected file: which files break if this
-// changes (incoming) and which files this depends on (outgoing). Defaults to
-// the heaviest file in the snapshot so the tab opens onto something concrete
-// instead of an empty state.
+// Hero view is blast radius. Two modes share the same hero slot:
+//   - File mode (default): which files break if THIS file changes (incoming),
+//     which files this file depends on (outgoing).
+//   - Function mode (after clicking a function chip or a top-functions item):
+//     which functions call THIS function (callers), which functions THIS
+//     function calls (callees). Click "Back to file" to return.
+//
+// Function mode requires resolved call edges from a Phase 5+ plugin (JS/TS,
+// Java, Go, Python). For files only covered by the regex-fallback plugin,
+// the function chips simply won't have call edges — the function view will
+// show empty lists, which is the honest outcome.
 //
 // Coverage chip at top makes our limits explicit: JS/TS gets full call-graph
 // + complexity, the other 7 languages contribute imports only via the
@@ -14,11 +21,14 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import {
   ArrowDownToLine,
+  ArrowLeft,
   ArrowUpFromLine,
   ChevronDown,
   ChevronRight,
   Code as CodeIcon,
   FileCode,
+  PhoneIncoming,
+  PhoneOutgoing,
   Search,
   Sparkles,
   Target,
@@ -27,7 +37,9 @@ import type { AnalysisSnapshot, CodeGraph } from "@/lib/types";
 import { TOK } from "@/lib/theme";
 import {
   computeBlastRadius,
+  computeFunctionBlastRadius,
   type BlastRadius,
+  type FunctionBlastRadius,
 } from "@/lib/codeAnalysis/blastRadius";
 
 const INITIAL_LIST_SIZE = 10;
@@ -69,6 +81,10 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
   const [selected, setSelected] = useState<string | null>(
     heavyFiles[0]?.file ?? null
   );
+  // Function-level zoom. null = file-level blast radius, set = function mode.
+  // Tied to `selected` (the file): switching files clears the function. Names
+  // are scoped to (file, name) pairs in the call graph.
+  const [selectedFunction, setSelectedFunction] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
 
@@ -83,6 +99,13 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
     return computeBlastRadius(cg, selected, { maxHops: 3 });
   }, [cg, selected]);
 
+  const fnBlast = useMemo(() => {
+    if (!selected || !selectedFunction) return null;
+    return computeFunctionBlastRadius(cg, selected, selectedFunction, {
+      maxHops: 3,
+    });
+  }, [cg, selected, selectedFunction]);
+
   const selectedComplexity = selected
     ? cg.fileComplexity[selected] ?? 0
     : null;
@@ -92,11 +115,23 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
         .sort((a, b) => b.complexity - a.complexity)
     : [];
 
+  function pickFile(f: string) {
+    setSelected(f);
+    setSelectedFunction(null); // reset zoom — different file means different fns
+    setQuery("");
+  }
+
+  function pickFunction(file: string, fnName: string) {
+    setSelected(file);
+    setSelectedFunction(fnName);
+    setQuery("");
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <CoverageChip cg={cg} />
 
-      {/* Hero: selected file + blast radius */}
+      {/* Hero: selected file + blast radius (file mode or function mode) */}
       <div
         className="rounded-xl p-5 flex flex-col gap-4"
         style={{
@@ -108,16 +143,24 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
           selected={selected}
           complexity={selectedComplexity}
           functions={selectedFunctions}
+          activeFunction={selectedFunction}
+          onSelectFunction={(name) =>
+            selected && setSelectedFunction(name)
+          }
           query={query}
           onQueryChange={setQuery}
           filtered={filtered}
-          onPick={(f) => {
-            setSelected(f);
-            setQuery("");
-          }}
+          onPick={pickFile}
         />
 
-        {blast && <BlastRadiusView blast={blast} />}
+        {selectedFunction && fnBlast ? (
+          <FunctionBlastRadiusView
+            blast={fnBlast}
+            onBack={() => setSelectedFunction(null)}
+          />
+        ) : (
+          blast && <BlastRadiusView blast={blast} />
+        )}
       </div>
 
       {/* Twin lists: heavy files + top complex functions */}
@@ -125,11 +168,11 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
         <HeavyFilesList
           files={heavyFiles}
           selected={selected}
-          onPick={(f) => setSelected(f)}
+          onPick={pickFile}
         />
         <TopFunctionsList
           functions={topFunctions}
-          onPick={(f) => setSelected(f)}
+          onPick={pickFunction}
         />
       </div>
     </div>
@@ -191,6 +234,8 @@ function SelectedFileHeader({
   selected,
   complexity,
   functions,
+  activeFunction,
+  onSelectFunction,
   query,
   onQueryChange,
   filtered,
@@ -199,6 +244,9 @@ function SelectedFileHeader({
   selected: string | null;
   complexity: number | null;
   functions: { name: string; complexity: number; startRow: number }[];
+  /** When set, the matching chip lights up to indicate function mode is on. */
+  activeFunction: string | null;
+  onSelectFunction: (name: string) => void;
   query: string;
   onQueryChange: (q: string) => void;
   filtered: string[];
@@ -244,24 +292,40 @@ function SelectedFileHeader({
         </div>
       )}
 
-      {/* Top functions in the selected file */}
+      {/* Top functions in the selected file. Clickable: zooms blast radius
+       *  in to function-level for the picked one. The active chip lights up
+       *  with the accent so users can find their way back. */}
       {functions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {functions.slice(0, 6).map((fn) => (
-            <span
-              key={`${fn.name}@${fn.startRow}`}
-              className="text-[11px] px-1.5 py-0.5 rounded font-mono"
-              style={{
-                background: TOK.surfaceElevated,
-                color: TOK.textSecondary,
-                border: `1px solid ${TOK.border}`,
-              }}
-              title={`Line ${fn.startRow + 1} · complexity ${fn.complexity}`}
-            >
-              {fn.name}{" "}
-              <span style={{ color: TOK.textMuted }}>{fn.complexity}</span>
-            </span>
-          ))}
+          {functions.slice(0, 6).map((fn) => {
+            const active = fn.name === activeFunction;
+            return (
+              <button
+                key={`${fn.name}@${fn.startRow}`}
+                onClick={() => onSelectFunction(fn.name)}
+                className="text-[11px] px-1.5 py-0.5 rounded font-mono transition cursor-pointer"
+                style={{
+                  background: active ? TOK.accentSoft : TOK.surfaceElevated,
+                  color: active ? TOK.textPrimary : TOK.textSecondary,
+                  border: `1px solid ${active ? TOK.accent : TOK.border}`,
+                }}
+                title={`Line ${fn.startRow + 1} · complexity ${fn.complexity}${
+                  active ? "" : " — click to focus"
+                }`}
+                onMouseEnter={(e) => {
+                  if (!active) e.currentTarget.style.borderColor = TOK.borderStrong;
+                }}
+                onMouseLeave={(e) => {
+                  if (!active) e.currentTarget.style.borderColor = TOK.border;
+                }}
+              >
+                {fn.name}{" "}
+                <span style={{ color: active ? TOK.accent : TOK.textMuted }}>
+                  {fn.complexity}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -319,7 +383,21 @@ function SelectedFileHeader({
   );
 }
 
-// ------------------- Blast radius view -------------------
+// ------------------- Blast radius views -------------------
+//
+// Two views, one shared section primitive. File mode shows just the path;
+// function mode shows the function name with the path as a muted secondary
+// line so users can tell which file the function lives in without crowding
+// the header.
+
+/** Unified shape for both file-level and function-level entries. The list
+ *  primitive renders `primary` prominently and `secondary` (when set) muted
+ *  underneath. */
+interface BlastListEntry {
+  primary: string;
+  secondary?: string;
+  hop: number;
+}
 
 function BlastRadiusView({ blast }: { blast: BlastRadius }) {
   return (
@@ -328,14 +406,16 @@ function BlastRadiusView({ blast }: { blast: BlastRadius }) {
         title="Incoming — what breaks if this changes"
         icon={<ArrowDownToLine size={14} />}
         accent={TOK.amber}
-        entries={blast.incoming}
+        unit="files"
+        entries={blast.incoming.map((e) => ({ primary: e.filePath, hop: e.hop }))}
         byHop={blast.byHop.incoming}
       />
       <BlastSection
         title="Outgoing — what this depends on"
         icon={<ArrowUpFromLine size={14} />}
         accent={TOK.accent}
-        entries={blast.outgoing}
+        unit="files"
+        entries={blast.outgoing.map((e) => ({ primary: e.filePath, hop: e.hop }))}
         byHop={blast.byHop.outgoing}
       />
       {blast.truncated && (
@@ -350,17 +430,121 @@ function BlastRadiusView({ blast }: { blast: BlastRadius }) {
   );
 }
 
+function FunctionBlastRadiusView({
+  blast,
+  onBack,
+}: {
+  blast: FunctionBlastRadius;
+  onBack: () => void;
+}) {
+  const totalCalls = blast.incoming.length + blast.outgoing.length;
+  const isEmpty = totalCalls === 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={onBack}
+          className="text-[11px] flex items-center gap-1 px-2 py-1 rounded transition cursor-pointer"
+          style={{
+            background: TOK.surfaceElevated,
+            color: TOK.textSecondary,
+            border: `1px solid ${TOK.border}`,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = TOK.borderStrong;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = TOK.border;
+          }}
+        >
+          <ArrowLeft size={11} />
+          Back to file blast radius
+        </button>
+        <span
+          className="text-[11px] flex items-center gap-1"
+          style={{ color: TOK.textMuted }}
+        >
+          <Target size={11} style={{ color: TOK.accent }} />
+          Zoomed into <span
+            className="font-mono"
+            style={{ color: TOK.textPrimary }}
+          >
+            {blast.target.name}
+          </span>
+        </span>
+      </div>
+
+      {/* Call-edge availability hint when both directions are empty.
+       *  Common reasons: file is parsed by regex-fallback (no resolved calls),
+       *  function is leaf-level on both sides, or the call sites use
+       *  expressions our resolver can't yet handle. */}
+      {isEmpty && (
+        <div
+          className="text-[11px] px-3 py-2 rounded"
+          style={{
+            background: TOK.bg,
+            border: `1px dashed ${TOK.border}`,
+            color: TOK.textMuted,
+          }}
+        >
+          No resolved call edges for this function. Either nothing calls it
+          (and it calls nothing internal), or the file is parsed by the
+          regex-fallback plugin which doesn&apos;t emit call edges.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <BlastSection
+          title="Callers — functions that call this"
+          icon={<PhoneIncoming size={14} />}
+          accent={TOK.amber}
+          unit="functions"
+          entries={blast.incoming.map((e) => ({
+            primary: e.name,
+            secondary: e.filePath,
+            hop: e.hop,
+          }))}
+          byHop={blast.byHop.incoming}
+        />
+        <BlastSection
+          title="Callees — functions this calls"
+          icon={<PhoneOutgoing size={14} />}
+          accent={TOK.accent}
+          unit="functions"
+          entries={blast.outgoing.map((e) => ({
+            primary: e.name,
+            secondary: e.filePath,
+            hop: e.hop,
+          }))}
+          byHop={blast.byHop.outgoing}
+        />
+        {blast.truncated && (
+          <div
+            className="md:col-span-2 text-[11px] flex items-center gap-2 px-2"
+            style={{ color: TOK.textMuted }}
+          >
+            {blast.truncated} — list above is partial.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BlastSection({
   title,
   icon,
   accent,
+  unit,
   entries,
   byHop,
 }: {
   title: string;
   icon: React.ReactNode;
   accent: string;
-  entries: { filePath: string; hop: number }[];
+  unit: "files" | "functions";
+  entries: BlastListEntry[];
   byHop: Record<number, number>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -385,7 +569,7 @@ function BlastSection({
           className="text-[11px] font-mono tabular-nums"
           style={{ color: TOK.textMuted }}
         >
-          {entries.length} files
+          {entries.length} {unit}
         </span>
       </div>
 
@@ -412,17 +596,18 @@ function BlastSection({
         )}
       </div>
 
-      {/* File list */}
+      {/* Entry list. Two-line layout when secondary is provided (function
+       *  mode shows the file path as muted context under the function name). */}
       {shown.length > 0 && (
         <ul className="flex flex-col gap-0.5 mt-1">
-          {shown.map((e) => (
+          {shown.map((e, idx) => (
             <li
-              key={e.filePath}
+              key={`${e.primary}@${e.secondary ?? ""}@${idx}`}
               className="text-[11px] font-mono flex items-center gap-2 py-0.5"
               style={{ color: TOK.textSecondary }}
             >
               <span
-                className="inline-flex items-center justify-center text-[9px] tabular-nums w-5 h-4 rounded"
+                className="inline-flex items-center justify-center text-[9px] tabular-nums w-5 h-4 rounded shrink-0"
                 style={{
                   background: TOK.surfaceElevated,
                   color: TOK.textMuted,
@@ -432,9 +617,20 @@ function BlastSection({
               >
                 {e.hop}
               </span>
-              <span className="truncate flex-1" title={e.filePath}>
-                {e.filePath}
-              </span>
+              <div className="flex-1 min-w-0 flex flex-col">
+                <span className="truncate" title={e.primary}>
+                  {e.primary}
+                </span>
+                {e.secondary && (
+                  <span
+                    className="truncate text-[10px]"
+                    style={{ color: TOK.textMuted }}
+                    title={e.secondary}
+                  >
+                    {e.secondary}
+                  </span>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -546,7 +742,9 @@ function TopFunctionsList({
      *  Python. Top-level functions stay undefined. */
     containerType?: string;
   }[];
-  onPick: (file: string) => void;
+  /** Receives both the file and the function name so the panel can zoom
+   *  straight into function-level blast radius. */
+  onPick: (file: string, fnName: string) => void;
 }) {
   return (
     <div
@@ -560,7 +758,7 @@ function TopFunctionsList({
         <CodeIcon size={13} />
         <span>Most complex functions</span>
         <span style={{ color: TOK.textMuted, textTransform: "none" }}>
-          (click to focus blast radius)
+          (click to zoom into function blast radius)
         </span>
       </div>
 
@@ -568,7 +766,7 @@ function TopFunctionsList({
         {functions.slice(0, 15).map((fn) => (
           <li key={`${fn.filePath}:${fn.name}@${fn.startRow}`}>
             <button
-              onClick={() => onPick(fn.filePath)}
+              onClick={() => onPick(fn.filePath, fn.name)}
               className="w-full flex items-center gap-3 py-1.5 px-2 rounded text-left transition"
               style={{ color: TOK.textSecondary }}
               onMouseEnter={(e) => {

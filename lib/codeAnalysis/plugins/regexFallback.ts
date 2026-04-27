@@ -36,9 +36,9 @@ const PLUGIN_NAME = "regex-fallback";
  *  for the Imports tab (Spring MVC convention).
  *
  *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13,
- *  Java → tree-sitter in v0.14. As more languages migrate this list will
- *  shrink, and when it's empty this whole file (plus lib/graph.ts's regex
- *  parsers) can be deleted. */
+ *  Java → tree-sitter in v0.14. Kotlin/C#/PHP/Ruby remain on regex —
+ *  Kotlin's tree-sitter migration was attempted in v0.20 but blocked on
+ *  WASM ABI mismatch (see PROGRESS.md "Kotlin WASM blocker"). */
 const EXTENSIONS = [
   "kt",
   "cs",

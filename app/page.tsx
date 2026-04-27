@@ -4,15 +4,21 @@
 import Link from "next/link";
 import { listSessions } from "@/lib/storage";
 import { TOK } from "@/lib/theme";
-import { RepoInputForm } from "@/components/RepoInputForm";
+import { RepoInputForm, type DemoRepo } from "@/components/RepoInputForm";
 import { SessionRow } from "@/components/SessionRow";
 
 export const dynamic = "force-dynamic";
 
-const DEMO_REPOS = [
-  "vercel/next.js",
-  "anthropics/claude-code",
-  "facebook/react",
+// Curated demo set. One entry per AST-backed plugin so the row showcases
+// the plugin architecture at a glance. Each pick is small/medium-sized —
+// large repos like vercel/next.js or torvalds/linux risk hitting the 25s
+// codeAnalysis timeout (see lib/github.ts) and degrading to "Code analysis
+// was skipped", which is a poor first impression.
+const DEMO_REPOS: DemoRepo[] = [
+  { repo: "colinhacks/zod", lang: "TypeScript" },
+  { repo: "gin-gonic/gin", lang: "Go" },
+  { repo: "pallets/flask", lang: "Python" },
+  { repo: "spring-projects/spring-petclinic", lang: "Java" },
 ];
 
 export default async function Home() {

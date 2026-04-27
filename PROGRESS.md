@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.19, end of session 5)
+## Current state (v0.20, end of session 6)
 
 ### What works end-to-end
 
@@ -55,7 +55,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 - **Refresh:** append snapshot, show "Since your last visit" diff banner with emerald gradient.
 - **Session CRUD:** rename, delete, multiple sessions. Session actions grouped: Share dropdown (Wrapped / Share card / Screenshot), primary Refresh, overflow menu for Delete.
 - **Rate-limit aware:** shows remaining in footer.
-- **Code tab (v0.11):** AST-based blast-radius UI on top of the codeAnalysis pipeline. Picks the heaviest file by default, shows incoming + outgoing dependency hops (3 deep, capped at 200 files per direction), the file's top-6 functions in the header, plus side-by-side "heaviest files" and "most complex functions" lists for quick navigation. Coverage chip is honest: full call-graph + complexity for JS/TS, imports only for the 7 fallback languages. New snapshots get `codeGraph` populated automatically; old snapshots show an empty state pointing to the Refresh button.
+- **Code tab (v0.11, function-level blast radius added in v0.20):** AST-based blast-radius UI on top of the codeAnalysis pipeline. Picks the heaviest file by default, shows incoming + outgoing dependency hops (3 deep, capped at 200 files per direction), the file's top-6 functions in the header (now clickable), plus side-by-side "heaviest files" and "most complex functions" lists for quick navigation. **Click a function chip or a top-functions item → zooms into function-level blast radius**: callers (functions that call this) and callees (functions this calls), same hop-3 / cap-200 BFS, distinct icons (PhoneIncoming/PhoneOutgoing). Empty-state hint when a function has no resolved calls (regex-fallback file or leaf-level). Coverage chip is honest: full call-graph + complexity for JS/TS, imports only for the 7 fallback languages. New snapshots get `codeGraph` populated automatically; old snapshots show an empty state pointing to the Refresh button.
 - **Code-analysis pipeline (v0.10 foundation):** AST-based parser for JS/TS via tree-sitter (WASM), regex-fallback for the other 7 languages, unified `CodeGraph` aggregate persisted on every fresh snapshot since Phase 4a. Also exposed standalone via `/api/debug/code-analysis` for live testing and `npm run analyze <path>` for local inspection. See "Code-analysis pipeline" below.
 
 ### Dependency-health pipeline (v0.9 architecture)
@@ -355,7 +355,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**268 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.17 added 12 tests in `codeAnalysis.test.ts` for TS/JS type-aware (class fields, constructor parameter properties, method params, typed locals, `new Foo()` inference, generic stripping, `this.method()`, multi-field disambiguation, JS-bare-calls-stay-undefined behavior, arrow-functions-as-named). v0.18 added 10 tests in `python.test.ts` for Python type-aware (containerType, self.method() resolution, PEP 526 fields, typed params, typed locals, `x = SomeClass()` constructor inference, generic stripping for both `subscript` and `generic_type` shapes, untyped fallthrough, multi-field disambiguation, __init__ self.X = typed-param patterns).
+**278 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.17 added 12 tests in `codeAnalysis.test.ts` for TS/JS type-aware (class fields, constructor parameter properties, method params, typed locals, `new Foo()` inference, generic stripping, `this.method()`, multi-field disambiguation, JS-bare-calls-stay-undefined behavior, arrow-functions-as-named). v0.18 added 10 tests in `python.test.ts` for Python type-aware (containerType, self.method() resolution, PEP 526 fields, typed params, typed locals, `x = SomeClass()` constructor inference, generic stripping for both `subscript` and `generic_type` shapes, untyped fallthrough, multi-field disambiguation, __init__ self.X = typed-param patterns). v0.20 added 10 tests in `blastRadius.test.ts` for function-level blast radius (callers, callees, transitive hops, module-scope skip, unresolved skip, same-name disambiguation across files, function-level cycles, maxHops cap, maxNodes cap with "functions" unit message).
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -421,11 +421,12 @@ Ranked "bang per buck". ✅ = shipped.
 
 **Phase 5 is complete.** All 4 statically-typed languages we support (JS/TS family, Python, Go, Java) now do deterministic type-aware call resolution where their grammar provides type information. The plugin contract has held up cleanly across four very different type systems.
 
+- ✅ v0.20 — **Function-level blast radius + curated demo row.** `computeFunctionBlastRadius(cg, file, fnName)` shares the BFS engine with the file-level version but uses CallEdge endpoints (fromFile, fromFunction) → (toFile, toFunction); module-scope and unresolved calls are skipped. UI: clicking a function chip in the SelectedFileHeader OR an item in TopFunctionsList zooms into function mode, "back to file" button restores file mode. BlastSection refactored to a generic two-line entry shape so file mode shows just the path and function mode shows function name + muted file path underneath. Landing page demo row replaced with a curated 4-pick set spanning each AST plugin (zod TS, gin Go, flask Python, spring-petclinic Java) with muted language labels — small enough to stay under the 25s codeAnalysis timeout.
+
 ### Next up: migrate remaining regex-fallback languages
 
-- Migrate Kotlin — Java's lillebror; could share JVM-style FQN indexing logic.
+- ⚠️ **Kotlin migration: blocked.** Attempted in v0.20 — `tree-sitter-wasms@0.1.13`'s Kotlin grammar fails ABI compatibility with `web-tree-sitter@0.26.8` (`failIf` at `getDylinkMetadata`). The maintained alternative `@tree-sitter-grammars/tree-sitter-kotlin@1.1.0` ships only `.c` source — building WASM ourselves needs Emscripten setup. Kotlin stays on regex-fallback until a compatible WASM grammar appears upstream.
 - Migrate C#, PHP, Ruby — in any order, ~1 evening each.
-- Function-level blast radius (today the hero is file-level) — the call-graph is per-function but the UI projects to files. Could add a "click a function chip → blast radius for just that function".
 - AST-based duplicate detection via tree-walking similarity hashes.
 - Test-to-code mapping refinements using the call-graph.
 
@@ -446,7 +447,7 @@ Each is ~1 evening of work, no blocking:
 - Empty states polish (fresh session, no data)
 - Memoize `nodeTypes` (silence React Flow console warning)
 - Auto-upgrade old snapshots on first view (currently user must click Refresh)
-- Landing-page hero illustration + demo-repo row
+- Landing-page hero illustration (demo-repo row landed in v0.20)
 - Per-contributor "Wrapped"-style achievements — extended cards
 - *(Done in v0.10 for JS/TS via tree-sitter; Java + the other 5 languages are one-file plugin migrations whenever we want them.)*
 
@@ -520,4 +521,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 5 (v0.19 — surface containerType in the Code tab UI; graceful timeout for codeAnalysis on huge repos so golang/go-class repos still create sessions; surface server errors honestly in the input form. Big-repo backgrounding is the next architectural challenge — see "Big-repo limits" section).*
+*Last updated: end of session 6 (v0.20 — function-level blast radius in the Code tab: click any function chip or top-functions item to zoom from file-level into "callers" / "callees" view, back button restores file mode. Landing page demo row replaced with a curated set spanning each AST plugin (zod TS, gin Go, flask Python, spring-petclinic Java). Kotlin tree-sitter migration attempted and rolled back — `tree-sitter-wasms@0.1.13`'s Kotlin grammar is ABI-incompatible with `web-tree-sitter@0.26.8`; deferred until a compatible WASM grammar lands upstream).*

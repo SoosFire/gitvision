@@ -17,7 +17,13 @@ const STAGES = [
 const TOTAL_WEIGHT = STAGES.reduce((a, s) => a + s.weight, 0);
 const ESTIMATED_MS = 22_000;
 
-export function RepoInputForm({ demoRepos = [] }: { demoRepos?: string[] }) {
+/** Demo-row entry. The language label shows up muted next to the repo path
+ *  so users can see at a glance which plugin (JS/TS, Go, Python, Java, …)
+ *  the row exercises. Plain string entries are still accepted for callers
+ *  that don't care about the label. */
+export type DemoRepo = string | { repo: string; lang: string };
+
+export function RepoInputForm({ demoRepos = [] }: { demoRepos?: DemoRepo[] }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -152,21 +158,36 @@ export function RepoInputForm({ demoRepos = [] }: { demoRepos?: string[] }) {
           <span className="text-xs" style={{ color: TOK.textMuted }}>
             Try with:
           </span>
-          {demoRepos.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setValue(r)}
-              className="text-xs font-mono px-2 py-1 rounded-md transition hover:scale-[1.02]"
-              style={{
-                background: TOK.surface,
-                border: `1px solid ${TOK.border}`,
-                color: TOK.textSecondary,
-              }}
-            >
-              {r}
-            </button>
-          ))}
+          {demoRepos.map((entry) => {
+            const item =
+              typeof entry === "string" ? { repo: entry, lang: "" } : entry;
+            return (
+              <button
+                key={item.repo}
+                type="button"
+                onClick={() => setValue(item.repo)}
+                className="text-xs font-mono px-2 py-1 rounded-md transition hover:scale-[1.02] flex items-center gap-1.5"
+                style={{
+                  background: TOK.surface,
+                  border: `1px solid ${TOK.border}`,
+                  color: TOK.textSecondary,
+                }}
+                title={
+                  item.lang ? `${item.repo} — ${item.lang}` : item.repo
+                }
+              >
+                <span>{item.repo}</span>
+                {item.lang && (
+                  <span
+                    className="text-[10px]"
+                    style={{ color: TOK.textMuted }}
+                  >
+                    · {item.lang}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
 
