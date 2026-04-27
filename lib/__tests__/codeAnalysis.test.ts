@@ -653,3 +653,224 @@ describe("vendored/minified file filter", () => {
     });
   });
 });
+
+describe("javascriptPlugin — type-aware tracking (v0.17)", () => {
+  beforeAll(async () => {
+    await javascriptPlugin.load();
+  });
+
+  it("emits containerType on class methods (TypeScript)", () => {
+    const file: SourceFile = {
+      rel: "Service.ts",
+      ext: "ts",
+      content:
+        "export class Service {\n" +
+        "  run() {}\n" +
+        "  stop() {}\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const run = parsed.functions.find((f) => f.name === "run");
+    const stop = parsed.functions.find((f) => f.name === "stop");
+    expect(run?.containerType).toBe("Service");
+    expect(stop?.containerType).toBe("Service");
+  });
+
+  it("emits containerType on JS class methods too (no type annotations needed)", () => {
+    const file: SourceFile = {
+      rel: "Service.js",
+      ext: "js",
+      content: "class Service {\n  run() {}\n}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    expect(parsed.functions[0].containerType).toBe("Service");
+  });
+
+  it("infers calleeType from explicit field type (TS)", () => {
+    const file: SourceFile = {
+      rel: "App.ts",
+      ext: "ts",
+      content:
+        "class App {\n" +
+        "  private validator: ValidatePassword;\n" +
+        "  run() {\n" +
+        "    this.validator.validate();\n" +
+        "  }\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const validateCall = parsed.calls.find(
+      (c) => c.calleeName === "validate"
+    );
+    expect(validateCall?.calleeType).toBe("ValidatePassword");
+  });
+
+  it("infers calleeType from constructor parameter properties (TS pattern)", () => {
+    // The Angular / NestJS / TS-classic shorthand: constructor params with
+    // an accessibility modifier become implicit class fields.
+    const file: SourceFile = {
+      rel: "App.ts",
+      ext: "ts",
+      content:
+        "class App {\n" +
+        "  constructor(private validator: ValidatePassword) {}\n" +
+        "  run() {\n" +
+        "    this.validator.validate();\n" +
+        "  }\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const validateCall = parsed.calls.find(
+      (c) => c.calleeName === "validate"
+    );
+    expect(validateCall?.calleeType).toBe("ValidatePassword");
+  });
+
+  it("infers calleeType from method parameter type", () => {
+    const file: SourceFile = {
+      rel: "App.ts",
+      ext: "ts",
+      content:
+        "class App {\n" +
+        "  check(v: ValidateEmail) {\n" +
+        "    v.validate();\n" +
+        "  }\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const validateCall = parsed.calls.find(
+      (c) => c.calleeName === "validate"
+    );
+    expect(validateCall?.calleeType).toBe("ValidateEmail");
+  });
+
+  it("infers calleeType from typed local variable declaration", () => {
+    const file: SourceFile = {
+      rel: "u.ts",
+      ext: "ts",
+      content:
+        "function use() {\n" +
+        "  const v: ValidateUserName = makeValidator();\n" +
+        "  v.validate();\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const validateCall = parsed.calls.find(
+      (c) => c.calleeName === "validate"
+    );
+    expect(validateCall?.calleeType).toBe("ValidateUserName");
+  });
+
+  it("infers calleeType from `new Foo()` initializer", () => {
+    const file: SourceFile = {
+      rel: "u.ts",
+      ext: "ts",
+      content:
+        "function use() {\n" +
+        "  const w = new Widget();\n" +
+        "  w.render();\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const renderCall = parsed.calls.find((c) => c.calleeName === "render");
+    expect(renderCall?.calleeType).toBe("Widget");
+  });
+
+  it("`this.method()` calleeType = current class", () => {
+    const file: SourceFile = {
+      rel: "C.ts",
+      ext: "ts",
+      content:
+        "class C {\n" +
+        "  outer() {\n" +
+        "    this.inner();\n" +
+        "  }\n" +
+        "  inner() {}\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const innerCall = parsed.calls.find((c) => c.calleeName === "inner");
+    expect(innerCall?.calleeType).toBe("C");
+  });
+
+  it("strips generics on TS type annotations (Map<K,V> → Map)", () => {
+    const file: SourceFile = {
+      rel: "u.ts",
+      ext: "ts",
+      content:
+        "function use() {\n" +
+        "  const m: Map<string, number> = new Map();\n" +
+        "  m.get('x');\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const getCall = parsed.calls.find((c) => c.calleeName === "get");
+    expect(getCall?.calleeType).toBe("Map");
+  });
+
+  it("two same-named methods on different fields disambiguate", () => {
+    const file: SourceFile = {
+      rel: "App.ts",
+      ext: "ts",
+      content:
+        "class App {\n" +
+        "  private vp: ValidatePassword;\n" +
+        "  private ve: ValidateEmail;\n" +
+        "  run() {\n" +
+        "    this.vp.validate();\n" +
+        "    this.ve.validate();\n" +
+        "  }\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const validateTypes = parsed.calls
+      .filter((c) => c.calleeName === "validate")
+      .map((c) => c.calleeType);
+    expect(validateTypes).toEqual(["ValidatePassword", "ValidateEmail"]);
+  });
+
+  it("JS bare calls inside methods stay UNDEFINED (no implicit this in JS)", () => {
+    // Critical difference from Java/Go: JS does NOT implicitly route
+    // bare-name calls to the surrounding class. `helper()` looks for a
+    // global / closure binding, NOT this.helper().
+    const file: SourceFile = {
+      rel: "Service.ts",
+      ext: "ts",
+      content:
+        "class Service {\n" +
+        "  run() {\n" +
+        "    helper();\n" + // bare — NOT this.helper()
+        "  }\n" +
+        "}\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const helperCall = parsed.calls.find((c) => c.calleeName === "helper");
+    expect(helperCall).toBeDefined();
+    expect(helperCall?.calleeType).toBeUndefined();
+  });
+
+  it("captures arrow functions assigned to const as named functions", () => {
+    const file: SourceFile = {
+      rel: "u.ts",
+      ext: "ts",
+      content:
+        "const makeWidget = () => new Widget();\n" +
+        "const noop = () => {};\n",
+    };
+    const ix = makeIndex([file]);
+    const parsed = parseFile(javascriptPlugin, file, ix);
+    const names = parsed.functions.map((f) => f.name).sort();
+    expect(names).toEqual(["makeWidget", "noop"]);
+  });
+});

@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.16, end of session 4)
+## Current state (v0.18, end of session 5)
 
 ### What works end-to-end
 
@@ -114,9 +114,24 @@ lib/codeAnalysis/
 ├── cli.ts                  Dev CLI: `npm run analyze <path>`.
 └── plugins/
     ├── javascript.ts       Tree-sitter (JS/TS/TSX/MJS/CJS/MTS/CTS) — full
-    │                       imports + functions + calls + complexity.
-    ├── python.ts           Tree-sitter (.py) — same coverage. Migrated
-    │                       from regex-fallback in v0.12.
+    │                       imports + functions + calls + complexity, plus
+    │                       type-aware call resolution since v0.17.
+    │                       parseDirect with manual AST walk that tracks
+    │                       class fields (TS public_field_definition with
+    │                       type_annotation), constructor parameter
+    │                       properties (`constructor(private x: Foo)`),
+    │                       method parameter types, typed local var
+    │                       declarations, and `new Foo()` initializer
+    │                       inference. JS files (no annotations) gracefully
+    │                       degrade — only containerType from class context.
+    ├── python.ts           Tree-sitter (.py) — same coverage as
+    │                       javascript.ts PLUS type-aware call resolution
+    │                       since v0.18. parseDirect tracks class-level
+    │                       annotated fields (PEP 526), self.X assignments
+    │                       in __init__ (when the param is typed), function
+    │                       parameter type hints, and `x: Foo = ...` typed
+    │                       local assignments. Untyped Python falls back
+    │                       to name-match gracefully.
     ├── go.ts               Tree-sitter (.go) — same coverage as
     │                       javascript.ts PLUS type-aware call resolution
     │                       since v0.16. parseDirect with two-pass walk:
@@ -147,13 +162,14 @@ lib/codeAnalysis/
 
 **Coverage matrix (live-tested against real repos):**
 
-| Language family | Plugin | Imports | Functions | Calls | Complexity |
-|---|---|---|---|---|---|
-| JS / TS / JSX / TSX / MJS / CJS / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ |
-| Python (.py) | `python` (v0.12) | ✅ AST | ✅ | ✅ | ✅ |
-| Go (.go) | `go` (v0.13) | ✅ AST | ✅ | ✅ | ✅ |
-| Java (.java) | `java` (v0.14) | ✅ AST | ✅ | ✅ | ✅ |
-| Kotlin, C#, PHP, Ruby | `regex-fallback` | ✅ regex | — | — | — |
+| Language family | Plugin | Imports | Functions | Calls | Complexity | Type-aware |
+|---|---|---|---|---|---|---|
+| JS / JSX / MJS / CJS | `javascript` | ✅ AST | ✅ | ✅ | ✅ | ✅ (v0.17, containerType only — JS has no type annotations) |
+| TS / TSX / MTS / CTS | `javascript` | ✅ AST | ✅ | ✅ | ✅ | ✅ (v0.17, full) |
+| Python (.py) | `python` | ✅ AST | ✅ | ✅ | ✅ | ✅ (v0.18, type hints) |
+| Go (.go) | `go` | ✅ AST | ✅ | ✅ | ✅ | ✅ (v0.16) |
+| Java (.java) | `java` | ✅ AST | ✅ | ✅ | ✅ | ✅ (v0.15) |
+| Kotlin, C#, PHP, Ruby | `regex-fallback` | ✅ regex | — | — | — | — |
 
 **Resolver features (the JS/TS plugin):**
 - TS-ESM convention: `./foo.js` spec → `./foo.ts` file (and the .jsx/.mjs/.cjs ↔ .tsx/.mts/.cts pairs).
@@ -299,7 +315,7 @@ lib/__tests__/
                             for Java/Python/Go (9 tests)
 ```
 
-**246 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.16 added 10 new tests in `go.test.ts` covering containerType from method receivers (including pointer-stripping), calleeType inference from receiver / struct field access / parameter / `var` / `:=` composite-literal / `:=` pointer-to-composite forms, bare-call implicit-receiver behavior, graceful pass-through for un-inferable `:=` rhs, and multi-field disambiguation on a single struct.
+**268 tests total, all passing.** Run with `npm test` (watch) or `npm run test:run` (CI). v0.17 added 12 tests in `codeAnalysis.test.ts` for TS/JS type-aware (class fields, constructor parameter properties, method params, typed locals, `new Foo()` inference, generic stripping, `this.method()`, multi-field disambiguation, JS-bare-calls-stay-undefined behavior, arrow-functions-as-named). v0.18 added 10 tests in `python.test.ts` for Python type-aware (containerType, self.method() resolution, PEP 526 fields, typed params, typed locals, `x = SomeClass()` constructor inference, generic stripping for both `subscript` and `generic_type` shapes, untyped fallthrough, multi-field disambiguation, __init__ self.X = typed-param patterns).
 
 Tests have caught real bugs at every stage: v0.8 found `lib/` incorrectly in `OUTPUT_LIKE_FOLDERS`; v0.10 caught query-syntax issues and the `../../` trailing-slash edge case before they shipped to production.
 
@@ -359,21 +375,13 @@ Ranked "bang per buck". ✅ = shipped.
 - ✅ v0.13 — Go migrated to its own tree-sitter plugin. `prepareForRepo` reads `go.mod` for module-prefix-aware import resolution, with a suffix-match heuristic as fallback. Live impact across four repos: gin (1,311 fns), cobra (589), testify (1,519), terraform (16,930). Top-complex surfaces gin's radix-tree router internals, cobra's shell completion, testify's `compare`, terraform's `backendFromConfig`.
 - ✅ v0.14 — Java migrated to its own tree-sitter plugin. `prepareForRepo` regex-scans `package` declarations across the FileIndex to build FQN→path + package→members maps; resolver tries direct FQN then falls back to package lookup (which catches wildcard imports). Live impact: spring-petclinic (165 fns), spring-boot (30,116 fns at the 5,000-file cap), guava (56,485), jenkins (19,895). Captures method + constructor invocations + `new Foo<>()` object creation as call sites.
 - ✅ v0.15 — **Phase 5a: type-aware call resolution for Java.** `ParsedFunction.containerType` + `ParsedCall.calleeType` (both optional) added to the plugin contract. The Java plugin switched to parseDirect + manual AST walk that tracks class field types, method parameter types, and local variable declarations in scope; resolves the receiver's type on every `obj.method()` call. `codeGraph.pickCallTarget` now uses calleeType + containerType as the primary disambiguator BEFORE falling back to same-file/imported-files. Live impact on the school Spring Boot project (RaceKatteKlubben): the 8 unresolved `validate()` calls dropped to 0; resolvedCalls 198→208. The unresolved list is now exclusively stdlib + Spring (JDBC ResultSet, Model, etc.) — no internal names left.
-- ✅ v0.16 — **Phase 5b: type-aware call resolution for Go.** Two-pass parseDirect: pass 1 collects every struct's `field_declaration_list` into a `structName → { fieldName → typeName }` table; pass 2 walks methods tracking receiver type (with `*Service` → `Service` pointer-stripping), parameter types, `var x Type` declarations, and `x := T{}` / `x := &T{}` composite literals. Receiver-types resolve `s.field.method()` chains via the struct field table. Bare calls inside a method (`helper()`) get the receiver type as implicit calleeType. `:=` from arbitrary expressions stays untyped (return-type inference is out of v1 scope). Validated against cobra, gin, testify — slight resolved-calls improvements (32-52% range; most remaining unresolved are stdlib calls that never could resolve to in-repo code) and zero regressions on the existing Go tests.
+- ✅ v0.16 — **Phase 5b: type-aware call resolution for Go.** Two-pass parseDirect: pass 1 collects every struct's `field_declaration_list` into a `structName → { fieldName → typeName }` table; pass 2 walks methods tracking receiver type (with `*Service` → `Service` pointer-stripping), parameter types, `var x Type` declarations, and `x := T{}` / `x := &T{}` composite literals. Receiver-types resolve `s.field.method()` chains via the struct field table.
+- ✅ v0.17 — **Phase 5c: type-aware call resolution for TypeScript** (and its JS-family siblings, where containerType still applies). javascriptPlugin switched to parseDirect with manual AST walk: tracks `public_field_definition` types, constructor parameter properties (TS shorthand: `constructor(private x: Foo)` creates an implicit `this.x: Foo`), method parameter types via `required_parameter`, typed local `const x: Foo = ...`, and `new Foo()` initializer inference for untyped const declarations. Critical JS-vs-Java/Go difference handled: bare calls inside JS methods do NOT get implicit-this, because that's not how JS works.
+- ✅ v0.18 — **Phase 5d: type-aware call resolution for Python.** parseDirect walks class bodies for PEP-526 annotated attributes (`name: Type`), `__init__` self.X assignments (when the source param has a type hint, the field inherits it), function parameter type hints (`def f(x: Foo)`), and typed local assignments (`x: Foo = ...`). Class instantiation patterns like `x = Widget()` are recognized as constructor calls and the variable gets the class type. self/cls in class methods automatically resolve to the enclosing class. Untyped Python falls back to name-match gracefully.
 
-### Next up: continue Phase 5 (type-aware resolution for the remaining 2 typed langs)
+**Phase 5 is complete.** All 4 statically-typed languages we support (JS/TS family, Python, Go, Java) now do deterministic type-aware call resolution where their grammar provides type information. The plugin contract has held up cleanly across four very different type systems.
 
-The Phase 5 contract (containerType + calleeType) is in place; each remaining
-typed language's plugin needs the same internal upgrade.
-
-- **Phase 5c — TypeScript**: explicit type annotations on class fields, function parameters, `let x: Type`. Inferred types are out of scope — TS inference is too complex for our static walk. ~2 evenings for the typed subset (which is 80%+ of modern TS).
-- **Phase 5d — Python**: optional type hints (`def f(x: Foo)`). Untyped Python stays name-match — no inference attempted. ~1 evening.
-
-After Phase 5 is fully shipped, the resolver will be deterministic for
-typed languages — UI-visible blast radius accuracy goes from "good
-heuristic" to "structural truth" for any project that uses static types.
-
-### Then: continue migrating remaining regex-fallback languages
+### Next up: migrate remaining regex-fallback languages
 
 - Migrate Kotlin — Java's lillebror; could share JVM-style FQN indexing logic.
 - Migrate C#, PHP, Ruby — in any order, ~1 evening each.
@@ -472,4 +480,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 4 (v0.16 — Phase 5b: type-aware call resolution for Go. Two-pass parseDirect collects struct field types in pass 1 and walks methods with full type-tracking scope in pass 2. Handles receiver-types, struct-field-access chains, var declarations, and `:=` composite-literal inference. TypeScript and Python remain for Phase 5c/5d).*
+*Last updated: end of session 5 (v0.18 — Phase 5 complete: type-aware call resolution shipped for all 4 statically-typed languages we support. JS/TS got the most complex rewrite because the plugin handles 8 extensions across 3 grammars; Python's type-hint subset rounds out the set. The Phase 5 contract — containerType + calleeType + pickCallTarget type-match — has held up across Java's class+package, Go's struct+receiver+pointer, TS' class+constructor-shorthand, and Python's PEP-526+__init__-self pattern).*
