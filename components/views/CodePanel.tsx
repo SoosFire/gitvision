@@ -109,11 +109,40 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
   const selectedComplexity = selected
     ? cg.fileComplexity[selected] ?? 0
     : null;
-  const selectedFunctions = selected
-    ? cg.functions
-        .filter((f) => f.filePath === selected)
-        .sort((a, b) => b.complexity - a.complexity)
-    : [];
+  // Functions in the selected file, deduped on name. CallEdges collapse
+  // same-name overloads (cg.calls.toFunction is a plain string, no container
+  // info), so two chips with the same name would produce identical blast
+  // radius — we'd be showing fake granularity. Keep the highest-complexity
+  // entry (already first after the desc sort) and remember the dropped
+  // siblings so the tooltip can be honest about what was hidden.
+  const selectedFunctions = useMemo(() => {
+    if (!selected) return [];
+    const all = cg.functions
+      .filter((f) => f.filePath === selected)
+      .sort((a, b) => b.complexity - a.complexity);
+    const counts = new Map<string, number>();
+    for (const f of all) counts.set(f.name, (counts.get(f.name) ?? 0) + 1);
+    const seen = new Set<string>();
+    const out: Array<{
+      name: string;
+      complexity: number;
+      startRow: number;
+      containerType?: string;
+      siblingCount: number;
+    }> = [];
+    for (const f of all) {
+      if (seen.has(f.name)) continue;
+      seen.add(f.name);
+      out.push({
+        name: f.name,
+        complexity: f.complexity,
+        startRow: f.startRow,
+        containerType: f.containerType,
+        siblingCount: (counts.get(f.name) ?? 1) - 1,
+      });
+    }
+    return out;
+  }, [cg.functions, selected]);
 
   function pickFile(f: string) {
     setSelected(f);
@@ -243,7 +272,17 @@ function SelectedFileHeader({
 }: {
   selected: string | null;
   complexity: number | null;
-  functions: { name: string; complexity: number; startRow: number }[];
+  /** Functions to render as chips, already deduped on name by the parent.
+   *  containerType is shown as a muted prefix (Blueprint.__init__) when
+   *  available; siblingCount > 0 means there were same-name overloads we
+   *  collapsed for the user (CallEdge can't distinguish them). */
+  functions: {
+    name: string;
+    complexity: number;
+    startRow: number;
+    containerType?: string;
+    siblingCount: number;
+  }[];
   /** When set, the matching chip lights up to indicate function mode is on. */
   activeFunction: string | null;
   onSelectFunction: (name: string) => void;
@@ -294,11 +333,21 @@ function SelectedFileHeader({
 
       {/* Top functions in the selected file. Clickable: zooms blast radius
        *  in to function-level for the picked one. The active chip lights up
-       *  with the accent so users can find their way back. */}
+       *  with the accent so users can find their way back. ContainerType
+       *  (when set) shows up as a muted prefix so Blueprint.__init__ and
+       *  BlueprintSetupState.__init__ are visually distinct. Same-name
+       *  siblings have been deduped by the parent — the tooltip notes how
+       *  many were collapsed, since they'd produce identical blast radius. */}
       {functions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {functions.slice(0, 6).map((fn) => {
             const active = fn.name === activeFunction;
+            const overloadHint =
+              fn.siblingCount > 0
+                ? ` · ${fn.siblingCount} other definition${
+                    fn.siblingCount === 1 ? "" : "s"
+                  } with this name (combined blast radius)`
+                : "";
             return (
               <button
                 key={`${fn.name}@${fn.startRow}`}
@@ -309,7 +358,7 @@ function SelectedFileHeader({
                   color: active ? TOK.textPrimary : TOK.textSecondary,
                   border: `1px solid ${active ? TOK.accent : TOK.border}`,
                 }}
-                title={`Line ${fn.startRow + 1} · complexity ${fn.complexity}${
+                title={`Line ${fn.startRow + 1} · complexity ${fn.complexity}${overloadHint}${
                   active ? "" : " — click to focus"
                 }`}
                 onMouseEnter={(e) => {
@@ -319,6 +368,11 @@ function SelectedFileHeader({
                   if (!active) e.currentTarget.style.borderColor = TOK.border;
                 }}
               >
+                {fn.containerType && (
+                  <span style={{ color: TOK.textMuted }}>
+                    {fn.containerType}.
+                  </span>
+                )}
                 {fn.name}{" "}
                 <span style={{ color: active ? TOK.accent : TOK.textMuted }}>
                   {fn.complexity}
