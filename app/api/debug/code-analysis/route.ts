@@ -20,6 +20,7 @@ import { z } from "zod";
 import { parseRepoUrl, fetchRepoMeta } from "@/lib/github";
 import { downloadAndExtract } from "@/lib/graph";
 import { analyzeDirectory } from "@/lib/codeAnalysis/analyze";
+import { csharpPlugin } from "@/lib/codeAnalysis/plugins/csharp";
 import { goPlugin } from "@/lib/codeAnalysis/plugins/go";
 import { javaPlugin } from "@/lib/codeAnalysis/plugins/java";
 import { javascriptPlugin } from "@/lib/codeAnalysis/plugins/javascript";
@@ -87,6 +88,7 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
       pythonPlugin,
       goPlugin,
       javaPlugin,
+      csharpPlugin,
       regexFallbackPlugin,
     ]);
     const summary = buildSummary(result.files, result.codeGraph);

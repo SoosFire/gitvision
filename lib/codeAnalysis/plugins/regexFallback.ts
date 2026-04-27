@@ -36,12 +36,12 @@ const PLUGIN_NAME = "regex-fallback";
  *  for the Imports tab (Spring MVC convention).
  *
  *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13,
- *  Java → tree-sitter in v0.14. Kotlin/C#/PHP/Ruby remain on regex —
- *  Kotlin's tree-sitter migration was attempted in v0.20 but blocked on
- *  WASM ABI mismatch (see PROGRESS.md "Kotlin WASM blocker"). */
+ *  Java → tree-sitter in v0.14, C# → tree-sitter in v0.21. Kotlin/PHP/Ruby
+ *  remain on regex — Kotlin's tree-sitter migration was attempted in v0.20
+ *  but blocked on WASM ABI mismatch (see PROGRESS.md "Kotlin WASM blocker");
+ *  PHP and Ruby are next up in v0.22 / v0.23. */
 const EXTENSIONS = [
   "kt",
-  "cs",
   "php",
   "rb",
   "html",

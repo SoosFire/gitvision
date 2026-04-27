@@ -21,6 +21,7 @@ import {
 import { analyzeRepoHistory, type GitLogCommit } from "./gitLog";
 import { analyzeDependencyHealth } from "./depsHealth/index";
 import { analyzeDirectory } from "./codeAnalysis/analyze";
+import { csharpPlugin } from "./codeAnalysis/plugins/csharp";
 import { goPlugin } from "./codeAnalysis/plugins/go";
 import { javaPlugin } from "./codeAnalysis/plugins/java";
 import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
@@ -475,6 +476,7 @@ export async function analyzeRepo(
       pythonPlugin,
       goPlugin,
       javaPlugin,
+      csharpPlugin,
       regexFallbackPlugin,
     ])
       .then((r) => ({ kind: "ok" as const, codeGraph: r.codeGraph }))

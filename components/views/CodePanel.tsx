@@ -210,13 +210,44 @@ function CodePanelInner({ cg }: { cg: CodeGraph }) {
 
 // ------------------- Coverage chip -------------------
 
+/** Stable display labels for the AST plugins, in alphabetical-ish order
+ *  matching the order languages migrated. Anything not in this map is
+ *  treated as regex-fallback (or future plugins; the chip will list "other"
+ *  if a new plugin shows up without a label). */
+const AST_PLUGIN_LABELS: Record<string, string> = {
+  javascript: "JS/TS",
+  python: "Python",
+  go: "Go",
+  java: "Java",
+  csharp: "C#",
+};
+
 function CoverageChip({ cg }: { cg: CodeGraph }) {
-  const jsStats = cg.byPlugin.javascript;
+  // Sum stats across every plugin that produced output. Pre-v0.21 this was
+  // hardcoded to read javascript-only; that was correct when JS/TS was the
+  // only AST plugin, but a 100% C# / Java / Go / Python repo showed
+  // "0 call-sites" because the chip wasn't summing across plugins.
   const fbStats = cg.byPlugin["regex-fallback"];
-  const jsFiles = jsStats?.files ?? 0;
   const fbFiles = fbStats?.files ?? 0;
-  const totalCalls = jsStats?.calls ?? 0;
+
+  let astFiles = 0;
+  let totalCalls = 0;
+  const activeAstLangs: string[] = [];
+  for (const [pluginName, stats] of Object.entries(cg.byPlugin)) {
+    if (!stats) continue;
+    if (pluginName === "regex-fallback") continue;
+    astFiles += stats.files ?? 0;
+    totalCalls += stats.calls ?? 0;
+    if (stats.files > 0) {
+      activeAstLangs.push(AST_PLUGIN_LABELS[pluginName] ?? pluginName);
+    }
+  }
+
   const fnCount = cg.functions.length;
+  // Sentence-case list: "JS/TS, Python, Go" — short enough to fit inline,
+  // tells the user exactly which plugins ran on this repo.
+  const langSuffix =
+    activeAstLangs.length > 0 ? ` (${activeAstLangs.join(", ")})` : "";
 
   return (
     <div
@@ -229,8 +260,8 @@ function CoverageChip({ cg }: { cg: CodeGraph }) {
     >
       <Sparkles size={13} style={{ color: TOK.accent }} />
       <span>
-        <strong style={{ color: TOK.textPrimary }}>{jsFiles}</strong> JS/TS
-        files via tree-sitter
+        <strong style={{ color: TOK.textPrimary }}>{astFiles}</strong> AST
+        files{langSuffix}
       </span>
       <span style={{ color: TOK.textMuted }}>·</span>
       <span>
@@ -248,8 +279,8 @@ function CoverageChip({ cg }: { cg: CodeGraph }) {
         <>
           <span style={{ color: TOK.textMuted }}>·</span>
           <span>
-            <strong style={{ color: TOK.textPrimary }}>{fbFiles}</strong> other-
-            language files (imports only)
+            <strong style={{ color: TOK.textPrimary }}>{fbFiles}</strong> regex-
+            fallback files (imports only)
           </span>
         </>
       )}

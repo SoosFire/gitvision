@@ -101,11 +101,12 @@ describe("extractImportsFromSourceFiles", () => {
 });
 
 describe("regexFallbackPlugin", () => {
-  it("advertises the four remaining non-AST languages plus html/css for resolution", () => {
-    // Python migrated in v0.12, Go in v0.13, Java in v0.14 — all have their
-    // own tree-sitter plugins. As more languages migrate this list shrinks.
+  it("advertises the three remaining non-AST languages plus html/css for resolution", () => {
+    // Python migrated in v0.12, Go in v0.13, Java in v0.14, C# in v0.21 —
+    // all have their own tree-sitter plugins. As more languages migrate this
+    // list shrinks.
     expect([...regexFallbackPlugin.extensions].sort()).toEqual(
-      ["cs", "css", "html", "kt", "php", "rb"]
+      ["css", "html", "kt", "php", "rb"]
     );
   });
 

@@ -145,12 +145,20 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
 
 /** Pick the best target for a call given the candidate function definitions
  *  with that name. Strategy (highest-precedence first):
- *    1. Exactly one candidate → take it.
- *    2. Type-aware: when the plugin supplied calleeType, prefer the
+ *    1. Type-aware: when the plugin supplied calleeType, prefer the
  *       candidate whose containerType matches. This is the deterministic
  *       answer for typed languages — `validatePassword.validate()` resolves
  *       to ValidatePassword.validate even when 6 other classes also have
- *       a `validate()` method.
+ *       a `validate()` method. **If calleeType is set but no candidate
+ *       matches, return null without falling through to the proximity
+ *       heuristics.** A typed receiver that isn't in our index is almost
+ *       always external (System.IO.TextWriter, etc.) — silently picking a
+ *       random internal method by name leads to bogus edges (we observed
+ *       production code "depending on" test files via this short-circuit
+ *       during v0.21 serilog validation).
+ *    2. Single-candidate (no type info): if there's only one function with
+ *       this name in the whole codebase, take it. Reasonable default for
+ *       dynamic languages and bare-call patterns.
  *    3. Same-file: prefer a same-file definition (handles intra-file
  *       helpers + recursive calls).
  *    4. Imported-file fallback: prefer a candidate the caller imports.
@@ -162,25 +170,23 @@ function pickCallTarget(
   importsByFile: Map<string, Set<string>>
 ): FunctionDef | null {
   if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0];
 
-  // 2. Type-aware match. Only fires when both sides have type info — a
-  //    plugin without type tracking falls through to the old heuristics.
+  // 1. Type-aware match — strict. If calleeType is set, the receiver had a
+  //    statically-inferable type. We only resolve to a candidate that
+  //    matches; otherwise we deliberately leave it unresolved.
   if (calleeType) {
     const typed = candidates.find((c) => c.containerType === calleeType);
-    if (typed) return typed;
+    return typed ?? null;
   }
 
-  // 3. Same-file fallback
+  // 2-5. No type info — fall back to proximity heuristics.
+  if (candidates.length === 1) return candidates[0];
   const sameFile = candidates.find((c) => c.filePath === fromFile);
   if (sameFile) return sameFile;
-
-  // 4. Imported-file fallback
   const importedFiles = importsByFile.get(fromFile);
   if (importedFiles) {
     const imported = candidates.find((c) => importedFiles.has(c.filePath));
     if (imported) return imported;
   }
-
   return null;
 }

@@ -223,6 +223,85 @@ describe("buildCodeGraph", () => {
     ]);
   });
 
+  it("type-aware: returns null when calleeType points to an external/unknown class (no fallthrough)", () => {
+    // Found during v0.21 serilog validation. Pre-fix, pickCallTarget would
+    // short-circuit on candidates.length === 1 BEFORE checking calleeType.
+    // Result: production code calling `writer.Flush()` (writer is
+    // System.IO.TextWriter) would resolve to a test file's NullTextWriter.Flush,
+    // because that's the only Flush in our index. The fix: when calleeType
+    // is set, only resolve to a containerType-matching candidate; otherwise
+    // leave unresolved (the receiver is external — silently picking the
+    // single internal candidate by name is wrong).
+    const files = [
+      pf({
+        rel: "test/Helper.cs",
+        functions: [
+          {
+            name: "Flush",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+            containerType: "TestHelper",
+          },
+        ],
+      }),
+      pf({
+        rel: "src/Logger.cs",
+        calls: [
+          {
+            calleeName: "Flush",
+            inFunction: "Write",
+            // Receiver type was inferred as TextWriter — an external class
+            // we don't index. No internal class has containerType=TextWriter.
+            calleeType: "TextWriter",
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls[0].toFile).toBeNull();
+    expect(g.calls[0].toFunction).toBeNull();
+  });
+
+  it("type-aware: does NOT consult same-file or imported-file fallback when calleeType is set but unmatched", () => {
+    // Strict-typing semantic: a typed receiver is a strong signal. Even if
+    // a same-file or imported-file candidate exists, we don't pick it when
+    // its containerType doesn't match — the receiver type is external
+    // information that overrides proximity.
+    const files = [
+      pf({
+        rel: "src/Caller.cs",
+        functions: [
+          // Same-file candidate that would normally win under proximity
+          {
+            name: "Save",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+            containerType: "Caller",
+          },
+        ],
+        calls: [
+          {
+            calleeName: "Save",
+            inFunction: "Run",
+            // Receiver type is JpaRepository — not Caller. The same-file
+            // Caller.Save shouldn't win.
+            calleeType: "JpaRepository",
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls[0].toFile).toBeNull();
+  });
+
   it("type-aware match overrides same-file fallback when calleeType is set", () => {
     // Edge case: a same-file shadow plus an external typed candidate. The
     // typed match wins because it's a stronger signal than file proximity.
