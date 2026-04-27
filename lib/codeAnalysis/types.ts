@@ -88,6 +88,16 @@ export interface ParsedCall {
    *  classes (Phase 5+). Undefined when not inferable (dynamic types,
    *  complex expressions, etc.). */
   calleeType?: string;
+  /** True when the original call had a receiver (`obj.method()`,
+   *  `Foo.method()`, `self.method()`) regardless of whether we could
+   *  infer its type. False or undefined for bare calls (`helper()`,
+   *  top-level functions, module-scope). Lets pickCallTarget refuse
+   *  single-candidate-match for receiver-having calls whose type is
+   *  unknown — that's the dynamic-language pattern that caused 76
+   *  spurious lib->spec edges in rspec-core (v0.23). Bare calls keep
+   *  the single-candidate fallback because the alternative (always
+   *  unresolved bare calls) loses too much real signal. */
+  hasReceiver?: boolean;
 }
 
 export interface ParsedFile {

@@ -14,6 +14,7 @@ import { javaPlugin } from "./plugins/java";
 import { javascriptPlugin } from "./plugins/javascript";
 import { phpPlugin } from "./plugins/php";
 import { pythonPlugin } from "./plugins/python";
+import { rubyPlugin } from "./plugins/ruby";
 import { regexFallbackPlugin } from "./plugins/regexFallback";
 
 async function main() {
@@ -31,6 +32,7 @@ async function main() {
     javaPlugin,
     csharpPlugin,
     phpPlugin,
+    rubyPlugin,
     regexFallbackPlugin,
   ]);
   const { totals, elapsedMs, files, truncated, codeGraph } = result;

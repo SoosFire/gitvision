@@ -37,12 +37,14 @@ const PLUGIN_NAME = "regex-fallback";
  *
  *  Migrations: Python → tree-sitter in v0.12, Go → tree-sitter in v0.13,
  *  Java → tree-sitter in v0.14, C# → tree-sitter in v0.21, PHP →
- *  tree-sitter in v0.22. Kotlin/Ruby remain on regex — Kotlin's tree-sitter
- *  migration was attempted in v0.20 but blocked on WASM ABI mismatch (see
- *  PROGRESS.md "Kotlin WASM blocker"); Ruby is next up in v0.23. */
+ *  tree-sitter in v0.22, Ruby → tree-sitter in v0.23. Only Kotlin remains
+ *  on regex — its tree-sitter migration was attempted in v0.20 but blocked
+ *  on WASM ABI mismatch (see PROGRESS.md "Kotlin WASM blocker"). HTML and
+ *  CSS stay here as render-target file types (we don't extract anything
+ *  from them, but they're needed in the FileIndex for Spring MVC controller
+ *  → template "renders" edges). */
 const EXTENSIONS = [
   "kt",
-  "rb",
   "html",
   "css",
 ] as const;

@@ -266,6 +266,129 @@ describe("buildCodeGraph", () => {
     expect(g.calls[0].toFunction).toBeNull();
   });
 
+  it("hasReceiver + no calleeType: refuses single-candidate match (dynamic-language safety)", () => {
+    // Found during v0.23 rspec-core validation. Pre-fix, a Ruby `obj.method()`
+    // call where obj's type was unknown would single-candidate-match
+    // against any `def method` in the codebase — typically the only one was
+    // in test fixtures (spec_helper.rb's `def new`, etc.), producing 76
+    // bogus lib->spec edges. Post-fix: receiver-having calls without a
+    // resolved calleeType skip single-candidate-match and require a
+    // proximity (same-file/imported) win.
+    const files = [
+      pf({
+        rel: "spec/spec_helper.rb",
+        functions: [
+          {
+            name: "new",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+            containerType: "SpecHelper",
+          },
+        ],
+      }),
+      pf({
+        rel: "lib/coordinator.rb",
+        calls: [
+          {
+            calleeName: "new",
+            inFunction: "bisect_with",
+            // hasReceiver: true — call was `something.new` where the type
+            // of "something" couldn't be inferred (dynamic Ruby).
+            hasReceiver: true,
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls[0].toFile).toBeNull();
+  });
+
+  it("hasReceiver: false bare calls keep single-candidate match (don't lose real signal)", () => {
+    // Counterpart to the previous test. Bare calls (`helper()` with no
+    // receiver) are typically free-standing functions or self-method
+    // shorthand; single-candidate-match is the right default for them.
+    const files = [
+      pf({
+        rel: "src/helpers.ts",
+        functions: [
+          {
+            name: "fetchUser",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+          },
+        ],
+      }),
+      pf({
+        rel: "src/page.ts",
+        calls: [
+          {
+            calleeName: "fetchUser",
+            inFunction: "render",
+            // hasReceiver: false (or undefined) — bare call
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    expect(g.calls[0].toFile).toBe("src/helpers.ts");
+  });
+
+  it("hasReceiver: true with no calleeType still uses proximity heuristics", () => {
+    // Receiver-having calls aren't ALWAYS unresolved — same-file or
+    // imported-file matches still resolve them. Only the
+    // single-candidate-by-name shortcut is disabled.
+    const files = [
+      pf({
+        rel: "src/a.ts",
+        functions: [
+          {
+            name: "process",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+          },
+        ],
+      }),
+      pf({
+        rel: "src/unrelated.ts",
+        functions: [
+          {
+            name: "process",
+            startRow: 1,
+            endRow: 5,
+            complexity: 1,
+          },
+        ],
+      }),
+      pf({
+        rel: "src/page.ts",
+        imports: [{ rawSpec: "./a", resolvedPath: "src/a.ts" }],
+        calls: [
+          {
+            calleeName: "process",
+            inFunction: "render",
+            hasReceiver: true,
+            // calleeType undefined — but receiver was present
+          },
+        ],
+      }),
+    ];
+    const g = buildCodeGraph({
+      parsedFiles: files,
+      pluginByFile: new Map(),
+    });
+    // Imported-file proximity wins over the unrelated same-named function
+    expect(g.calls[0].toFile).toBe("src/a.ts");
+  });
+
   it("type-aware: does NOT consult same-file or imported-file fallback when calleeType is set but unmatched", () => {
     // Strict-typing semantic: a typed receiver is a strong signal. Even if
     // a same-file or imported-file candidate exists, we don't pick it when

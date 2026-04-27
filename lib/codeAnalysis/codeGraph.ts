@@ -75,6 +75,7 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
       const target = pickCallTarget(
         f.rel,
         c.calleeType,
+        c.hasReceiver ?? false,
         candidates,
         importsByFile
       );
@@ -150,43 +151,61 @@ export function buildCodeGraph(input: BuildCodeGraphInput): CodeGraph {
  *       answer for typed languages — `validatePassword.validate()` resolves
  *       to ValidatePassword.validate even when 6 other classes also have
  *       a `validate()` method. **If calleeType is set but no candidate
- *       matches, return null without falling through to the proximity
+ *       matches, return null without falling through to proximity
  *       heuristics.** A typed receiver that isn't in our index is almost
  *       always external (System.IO.TextWriter, etc.) — silently picking a
- *       random internal method by name leads to bogus edges (we observed
- *       production code "depending on" test files via this short-circuit
- *       during v0.21 serilog validation).
- *    2. Single-candidate (no type info): if there's only one function with
- *       this name in the whole codebase, take it. Reasonable default for
- *       dynamic languages and bare-call patterns.
- *    3. Same-file: prefer a same-file definition (handles intra-file
- *       helpers + recursive calls).
- *    4. Imported-file fallback: prefer a candidate the caller imports.
- *    5. Otherwise leave unresolved — better than guessing wrong. */
+ *       random internal method by name leads to bogus edges (observed in
+ *       v0.21 serilog validation).
+ *    2. Receiver-but-no-type: when the call had a receiver but the type
+ *       couldn't be inferred (dynamic languages, chained calls, untyped
+ *       params), DON'T single-candidate-match — that's a near-pure-luck
+ *       resolution and produced 76 spurious lib->spec edges in rspec-core
+ *       (v0.23). Try same-file / imported-file proximity heuristics
+ *       directly; otherwise leave unresolved.
+ *    3. Bare-call (no receiver, no type): single-candidate-match is
+ *       reasonable. Bare calls go to top-level / module-scope functions
+ *       which usually have unique names.
+ *    4. Same-file fallback for ambiguous bare-or-unknown calls.
+ *    5. Imported-file fallback.
+ *    6. Otherwise leave unresolved. */
 function pickCallTarget(
   fromFile: string,
   calleeType: string | undefined,
+  hasReceiver: boolean,
   candidates: FunctionDef[],
   importsByFile: Map<string, Set<string>>
 ): FunctionDef | null {
   if (candidates.length === 0) return null;
 
-  // 1. Type-aware match — strict. If calleeType is set, the receiver had a
-  //    statically-inferable type. We only resolve to a candidate that
-  //    matches; otherwise we deliberately leave it unresolved.
+  // 1. Strict type-aware match.
   if (calleeType) {
     const typed = candidates.find((c) => c.containerType === calleeType);
     return typed ?? null;
   }
 
-  // 2-5. No type info — fall back to proximity heuristics.
-  if (candidates.length === 1) return candidates[0];
-  const sameFile = candidates.find((c) => c.filePath === fromFile);
-  if (sameFile) return sameFile;
-  const importedFiles = importsByFile.get(fromFile);
-  if (importedFiles) {
-    const imported = candidates.find((c) => importedFiles.has(c.filePath));
-    if (imported) return imported;
+  // Common proximity helpers (used by both 2 and 3+ branches below).
+  function pickByProximity(): FunctionDef | null {
+    const sameFile = candidates.find((c) => c.filePath === fromFile);
+    if (sameFile) return sameFile;
+    const importedFiles = importsByFile.get(fromFile);
+    if (importedFiles) {
+      const imported = candidates.find((c) =>
+        importedFiles.has(c.filePath)
+      );
+      if (imported) return imported;
+    }
+    return null;
   }
-  return null;
+
+  // 2. Receiver was present but type unknown — refuse single-candidate
+  //    match. The call goes through SOMETHING; resolving by name alone is
+  //    near-random when there's only one match and that match might be
+  //    in unrelated code (e.g., test fixtures).
+  if (hasReceiver) {
+    return pickByProximity();
+  }
+
+  // 3-5. Bare call — single-candidate is the best signal we have.
+  if (candidates.length === 1) return candidates[0];
+  return pickByProximity();
 }

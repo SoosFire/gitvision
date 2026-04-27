@@ -27,6 +27,7 @@ import { javaPlugin } from "./codeAnalysis/plugins/java";
 import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
 import { phpPlugin } from "./codeAnalysis/plugins/php";
 import { pythonPlugin } from "./codeAnalysis/plugins/python";
+import { rubyPlugin } from "./codeAnalysis/plugins/ruby";
 import { regexFallbackPlugin } from "./codeAnalysis/plugins/regexFallback";
 
 const octokit = new Octokit({
@@ -479,6 +480,7 @@ export async function analyzeRepo(
       javaPlugin,
       csharpPlugin,
       phpPlugin,
+      rubyPlugin,
       regexFallbackPlugin,
     ])
       .then((r) => ({ kind: "ok" as const, codeGraph: r.codeGraph }))

@@ -101,12 +101,14 @@ describe("extractImportsFromSourceFiles", () => {
 });
 
 describe("regexFallbackPlugin", () => {
-  it("advertises the two remaining non-AST languages plus html/css for resolution", () => {
+  it("advertises only Kotlin (plus html/css for resolution targets)", () => {
     // Python migrated in v0.12, Go in v0.13, Java in v0.14, C# in v0.21,
-    // PHP in v0.22 — all have their own tree-sitter plugins. As more
-    // languages migrate this list shrinks. Kotlin and Ruby are what's left.
+    // PHP in v0.22, Ruby in v0.23 — all have their own tree-sitter
+    // plugins. Kotlin remains here because its WASM grammar is ABI-
+    // incompatible with web-tree-sitter (see PROGRESS.md "Kotlin WASM
+    // blocker"). HTML/CSS are render-target file types only.
     expect([...regexFallbackPlugin.extensions].sort()).toEqual(
-      ["css", "html", "kt", "rb"]
+      ["css", "html", "kt"]
     );
   });
 
@@ -118,31 +120,31 @@ describe("regexFallbackPlugin", () => {
   });
 
   it("prepareForRepo + parseDirect produces import edges with resolvedPath populated", async () => {
-    // PHP migrated to its own tree-sitter plugin in v0.22, so we exercise
-    // the regex-fallback path with Ruby — it's still in the regex-fallback
-    // extension list and graph.ts's Ruby parser supports `class Child < Parent`
+    // Ruby migrated to its own tree-sitter plugin in v0.23, so we exercise
+    // the regex-fallback path with Kotlin — the only remaining non-AST
+    // language. graph.ts's Kotlin parser supports `class Child : Parent()`
     // extends syntax.
     const files: SourceFile[] = [
       {
-        rel: "lib/base.rb",
-        ext: "rb",
-        content: "class Base\nend\n",
+        rel: "src/com/x/Base.kt",
+        ext: "kt",
+        content: "package com.x\n\nopen class Base\n",
       },
       {
-        rel: "lib/child.rb",
-        ext: "rb",
-        content: "require_relative 'base'\nclass Child < Base\nend\n",
+        rel: "src/com/x/Child.kt",
+        ext: "kt",
+        content: "package com.x\n\nclass Child : Base()\n",
       },
     ];
     const ix = makeIndex(files);
     await regexFallbackPlugin.prepareForRepo("/fake/root", ix);
     const parsed = regexFallbackPlugin.parseDirect(files[1], ix);
-    expect(parsed.rel).toBe("lib/child.rb");
+    expect(parsed.rel).toBe("src/com/x/Child.kt");
     expect(parsed.functions).toHaveLength(0);
     expect(parsed.calls).toHaveLength(0);
     expect(parsed.imports.length).toBeGreaterThanOrEqual(1);
     const extendsEdge = parsed.imports.find((i) => i.kind === "extends");
-    expect(extendsEdge?.resolvedPath).toBe("lib/base.rb");
+    expect(extendsEdge?.resolvedPath).toBe("src/com/x/Base.kt");
   });
 
   it("returns an empty ParsedFile for files no regex parser handles (html/css)", async () => {
