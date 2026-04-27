@@ -541,6 +541,10 @@ function TopFunctionsList({
     name: string;
     complexity: number;
     startRow: number;
+    /** Class/struct/etc. this function belongs to, when type-aware extraction
+     *  caught it. v0.15+ for Java, v0.16+ for Go, v0.17+ for TS, v0.18+ for
+     *  Python. Top-level functions stay undefined. */
+    containerType?: string;
   }[];
   onPick: (file: string) => void;
 }) {
@@ -584,8 +588,17 @@ function TopFunctionsList({
                 <span
                   className="text-xs font-mono truncate"
                   style={{ color: TOK.textPrimary }}
-                  title={fn.name}
+                  title={
+                    fn.containerType
+                      ? `${fn.containerType}.${fn.name}`
+                      : fn.name
+                  }
                 >
+                  {fn.containerType && (
+                    <span style={{ color: TOK.textMuted }}>
+                      {fn.containerType}.
+                    </span>
+                  )}
                   {fn.name}
                 </span>
                 <span
