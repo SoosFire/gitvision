@@ -18,6 +18,51 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
+## Strategy & current focus (post-v0.20)
+
+GitVision is intentionally **not launching publicly** until the core experience covers most languages and most repos. Decision logged end of session 6 after a strategy discussion: hellere bruge tiden på at finpudse end at risikere et dårligt første-indtryk på en bredere audience.
+
+### Vision (held open until validated)
+
+A tool people integrate into their daily workflow — solo or team. Not a quick try-it-and-leave SaaS. The bar for launch is therefore high. The "profile · login · upgrade-account" pivot question is genuinely on the table but **paused** until Fase 1 + 2 below are done and we have a product worth showing. Validation comes from real-user signal post-launch, not up-front investment in tier mechanics.
+
+### Phases (in order)
+
+**Fase 1 — Sprog-coverage (~3-4 aftener total)**
+- v0.21: C# tree-sitter migration. Java-style mønster (package + class FQN indexing), strong type system → Phase 5 type-aware lands cleanly.
+- v0.22: PHP tree-sitter migration. Typed signatures where present (PHP 7+), dynamic elsewhere.
+- v0.23: Ruby tree-sitter migration. Fully dynamic — Phase 5 falls back to same-file / imported-file resolver, containerType still holds for class-method scoping.
+- ⚠️ Kotlin stays blocked (WASM ABI mismatch — see "Next up" section below).
+- Outcome: **7 of 8 supported languages on AST + parseDirect**, only Kotlin on regex-fallback.
+
+Grammar smoke-test passed end of session 6: `tree-sitter-c-sharp.wasm` (5.1 MB), `tree-sitter-php.wasm` (1.0 MB), `tree-sitter-ruby.wasm` (2.1 MB) all ship with `@vscode/tree-sitter-wasm@0.3.1` and load + parse cleanly via `web-tree-sitter@0.26.8`. No Kotlin-style ABI surprise.
+
+**Fase 2 — Stor-repo-håndtering (~1-3 uger total)**
+- v0.24: Subset analysis. Let user pick a subdir (`golang/go/src/cmd`) before tarball extract. Fast UX win, low technical risk, gives user agency over scope.
+- v0.25: Job queue + async. `POST /api/sessions` returns `job_id`; frontend polls `/api/jobs/:id` until `done|failed`. No request timeout. The proper fix for chromium / linux-class repos. ~1-2 weeks retrofit.
+- Outcome: **any repo that fits within reasonable disk + memory budgets analyzes successfully**, no silent timeout-skip.
+
+**Fase 3 — Polish & wow (TBD post-Fase 2)**
+- Refresh banner with real "what changed" narrative (currently functional, not screenshot-worthy alone — fails Guiding-Principle 2).
+- Test-to-code mapping via call-graph (we have the data, UI doesn't surface it).
+- AST-based duplicate detection (subtree-similarity hashes).
+- Per-user session isolation light: anonymous owner-id in localStorage. NOT OAuth — just "don't show other people's sessions on the landing page".
+- CallEdge.toContainerType extension (revisit chip-dedup; right now overloads collapse on the BFS engine — see commit `2d4fede`).
+
+### Explicitly paused — revisit after Fase 2
+
+Real items, intentionally on hold:
+
+- ~~OAuth / "Login with GitHub"~~ — pivot question, not feature. Fase 2's outcome tells us if the SaaS-platform direction is justified.
+- ~~Token-felt as launch fallback~~ — would be obviated by OAuth; no point doing both.
+- ~~Launch-prep~~ (landing copy, public-beta framing, feedback channel, analytics tagging).
+- ~~"Upgrade account" / SaaS billing~~ — depends entirely on real-user signal post-launch.
+- ~~Stor-repo gate as graceful-skip patch~~ — Fase 2's job queue makes it unnecessary.
+
+The 6-step launch-readiness list discussed end of session 6 is on hold until kerneproduktet is "good enough for users" — defined as Fase 1 + 2 landing.
+
+---
+
 ## Current state (v0.20, end of session 6)
 
 ### What works end-to-end
@@ -423,12 +468,16 @@ Ranked "bang per buck". ✅ = shipped.
 
 - ✅ v0.20 — **Function-level blast radius + curated demo row.** `computeFunctionBlastRadius(cg, file, fnName)` shares the BFS engine with the file-level version but uses CallEdge endpoints (fromFile, fromFunction) → (toFile, toFunction); module-scope and unresolved calls are skipped. UI: clicking a function chip in the SelectedFileHeader OR an item in TopFunctionsList zooms into function mode, "back to file" button restores file mode. BlastSection refactored to a generic two-line entry shape so file mode shows just the path and function mode shows function name + muted file path underneath. Landing page demo row replaced with a curated 4-pick set spanning each AST plugin (zod TS, gin Go, flask Python, spring-petclinic Java) with muted language labels — small enough to stay under the 25s codeAnalysis timeout.
 
-### Next up: migrate remaining regex-fallback languages
+### Next up — Fase 1 of the post-v0.20 roadmap
 
+See the "Strategy & current focus" section near the top for full context. Fase 1 is the sprog-coverage push:
+
+- **v0.21 — C# migration.** Up next. Smoke-tested at end of session 6 (`tree-sitter-c-sharp.wasm` shipped via `@vscode/tree-sitter-wasm@0.3.1`, loads + parses cleanly). Java-style FQN indexing pattern transfers; Phase 5 type-aware should land naturally.
+- **v0.22 — PHP migration.**
+- **v0.23 — Ruby migration.**
 - ⚠️ **Kotlin migration: blocked.** Attempted in v0.20 — `tree-sitter-wasms@0.1.13`'s Kotlin grammar fails ABI compatibility with `web-tree-sitter@0.26.8` (`failIf` at `getDylinkMetadata`). The maintained alternative `@tree-sitter-grammars/tree-sitter-kotlin@1.1.0` ships only `.c` source — building WASM ourselves needs Emscripten setup. Kotlin stays on regex-fallback until a compatible WASM grammar appears upstream.
-- Migrate C#, PHP, Ruby — in any order, ~1 evening each.
-- AST-based duplicate detection via tree-walking similarity hashes.
-- Test-to-code mapping refinements using the call-graph.
+
+Other items (test-to-code mapping, AST duplicate detection) move to Fase 3 in the strategy section.
 
 ### Dep-health follow-ups (small, anytime)
 
@@ -521,4 +570,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 6 (v0.20 — function-level blast radius in the Code tab: click any function chip or top-functions item to zoom from file-level into "callers" / "callees" view, back button restores file mode. Landing page demo row replaced with a curated set spanning each AST plugin (zod TS, gin Go, flask Python, spring-petclinic Java). Kotlin tree-sitter migration attempted and rolled back — `tree-sitter-wasms@0.1.13`'s Kotlin grammar is ABI-incompatible with `web-tree-sitter@0.26.8`; deferred until a compatible WASM grammar lands upstream).*
+*Last updated: end of session 6 (v0.20 + strategy decision — function-level blast radius landed in the Code tab; landing page demo row replaced with a curated set spanning each AST plugin; Kotlin migration attempted and rolled back due to WASM ABI mismatch; chip-dedup follow-up shipped as `2d4fede`. Strategy discussion at end of session: deliberate decision to NOT launch publicly until Fase 1 (sprog-coverage: C#/PHP/Ruby tree-sitter migrations) and Fase 2 (stor-repo-håndtering: subset analysis + job queue) are complete. OAuth / launch-prep / upgrade-account explicitly paused. Vision: integrated work-tool, validated by real-user signal post-launch — not a quick try-it-and-leave SaaS.).*
