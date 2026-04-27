@@ -24,6 +24,7 @@ import { csharpPlugin } from "@/lib/codeAnalysis/plugins/csharp";
 import { goPlugin } from "@/lib/codeAnalysis/plugins/go";
 import { javaPlugin } from "@/lib/codeAnalysis/plugins/java";
 import { javascriptPlugin } from "@/lib/codeAnalysis/plugins/javascript";
+import { phpPlugin } from "@/lib/codeAnalysis/plugins/php";
 import { pythonPlugin } from "@/lib/codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "@/lib/codeAnalysis/plugins/regexFallback";
 import type { CodeGraph, ParsedFile } from "@/lib/codeAnalysis/types";
@@ -89,6 +90,7 @@ async function runAnalysis(input: string, requestedRef?: string): Promise<Respon
       goPlugin,
       javaPlugin,
       csharpPlugin,
+      phpPlugin,
       regexFallbackPlugin,
     ]);
     const summary = buildSummary(result.files, result.codeGraph);

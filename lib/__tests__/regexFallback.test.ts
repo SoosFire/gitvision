@@ -101,12 +101,12 @@ describe("extractImportsFromSourceFiles", () => {
 });
 
 describe("regexFallbackPlugin", () => {
-  it("advertises the three remaining non-AST languages plus html/css for resolution", () => {
-    // Python migrated in v0.12, Go in v0.13, Java in v0.14, C# in v0.21 —
-    // all have their own tree-sitter plugins. As more languages migrate this
-    // list shrinks.
+  it("advertises the two remaining non-AST languages plus html/css for resolution", () => {
+    // Python migrated in v0.12, Go in v0.13, Java in v0.14, C# in v0.21,
+    // PHP in v0.22 — all have their own tree-sitter plugins. As more
+    // languages migrate this list shrinks. Kotlin and Ruby are what's left.
     expect([...regexFallbackPlugin.extensions].sort()).toEqual(
-      ["css", "html", "kt", "php", "rb"]
+      ["css", "html", "kt", "rb"]
     );
   });
 
@@ -118,30 +118,31 @@ describe("regexFallbackPlugin", () => {
   });
 
   it("prepareForRepo + parseDirect produces import edges with resolvedPath populated", async () => {
-    // Java migrated to its own tree-sitter plugin in v0.14, so we exercise
-    // the regex-fallback path with PHP — it's still in the regex-fallback
-    // extension list and graph.ts's PHP parser supports `extends`.
+    // PHP migrated to its own tree-sitter plugin in v0.22, so we exercise
+    // the regex-fallback path with Ruby — it's still in the regex-fallback
+    // extension list and graph.ts's Ruby parser supports `class Child < Parent`
+    // extends syntax.
     const files: SourceFile[] = [
       {
-        rel: "src/Base.php",
-        ext: "php",
-        content: "<?php\nnamespace App;\nclass Base {}\n",
+        rel: "lib/base.rb",
+        ext: "rb",
+        content: "class Base\nend\n",
       },
       {
-        rel: "src/Child.php",
-        ext: "php",
-        content: "<?php\nnamespace App;\nclass Child extends Base {}\n",
+        rel: "lib/child.rb",
+        ext: "rb",
+        content: "require_relative 'base'\nclass Child < Base\nend\n",
       },
     ];
     const ix = makeIndex(files);
     await regexFallbackPlugin.prepareForRepo("/fake/root", ix);
     const parsed = regexFallbackPlugin.parseDirect(files[1], ix);
-    expect(parsed.rel).toBe("src/Child.php");
+    expect(parsed.rel).toBe("lib/child.rb");
     expect(parsed.functions).toHaveLength(0);
     expect(parsed.calls).toHaveLength(0);
     expect(parsed.imports.length).toBeGreaterThanOrEqual(1);
     const extendsEdge = parsed.imports.find((i) => i.kind === "extends");
-    expect(extendsEdge?.resolvedPath).toBe("src/Base.php");
+    expect(extendsEdge?.resolvedPath).toBe("lib/base.rb");
   });
 
   it("returns an empty ParsedFile for files no regex parser handles (html/css)", async () => {

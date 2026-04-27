@@ -12,6 +12,7 @@ import { csharpPlugin } from "./plugins/csharp";
 import { goPlugin } from "./plugins/go";
 import { javaPlugin } from "./plugins/java";
 import { javascriptPlugin } from "./plugins/javascript";
+import { phpPlugin } from "./plugins/php";
 import { pythonPlugin } from "./plugins/python";
 import { regexFallbackPlugin } from "./plugins/regexFallback";
 
@@ -29,6 +30,7 @@ async function main() {
     goPlugin,
     javaPlugin,
     csharpPlugin,
+    phpPlugin,
     regexFallbackPlugin,
   ]);
   const { totals, elapsedMs, files, truncated, codeGraph } = result;

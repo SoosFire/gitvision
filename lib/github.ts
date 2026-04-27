@@ -25,6 +25,7 @@ import { csharpPlugin } from "./codeAnalysis/plugins/csharp";
 import { goPlugin } from "./codeAnalysis/plugins/go";
 import { javaPlugin } from "./codeAnalysis/plugins/java";
 import { javascriptPlugin } from "./codeAnalysis/plugins/javascript";
+import { phpPlugin } from "./codeAnalysis/plugins/php";
 import { pythonPlugin } from "./codeAnalysis/plugins/python";
 import { regexFallbackPlugin } from "./codeAnalysis/plugins/regexFallback";
 
@@ -477,6 +478,7 @@ export async function analyzeRepo(
       goPlugin,
       javaPlugin,
       csharpPlugin,
+      phpPlugin,
       regexFallbackPlugin,
     ])
       .then((r) => ({ kind: "ok" as const, codeGraph: r.codeGraph }))
