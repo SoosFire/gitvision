@@ -18,7 +18,7 @@ A desktop-grade repo visualizer that feels like a Figma canvas — paste a GitHu
 
 ---
 
-## Current state (v0.18, end of session 5)
+## Current state (v0.19, end of session 5)
 
 ### What works end-to-end
 
@@ -278,6 +278,46 @@ Graceful fallback: if `git` isn't on PATH, REST-only path (80-commit sample). If
 15. **lucide-react for all icons.** Consistent sizing (12-14px), tree-shaken, matches the Linear look. No emoji in UI chrome.
 16. **Hybrid rule-based signals + Claude narrative.** Every AI claim is grounded in a computed signal. Zero hallucination room.
 
+### Big-repo limits (the next architectural challenge)
+
+We hit Railway's request timeout on golang/go (~5,000+ Go files). The
+debug endpoint succeeds in ~50s but the full session-creation pipeline
+exceeds Railway's ~60s budget because it does substantially more work
+(git history, dep-health, the codeAnalysis pipeline, etc. all in series
++ parallel).
+
+**v0.19 graceful degradation** (shipped):
+- codeAnalysis is wrapped in a 25s timeout. When exceeded, the snapshot
+  saves WITHOUT codeGraph but with a `codeGraphSkipReason` string. The
+  Code tab shows an explicit "skipped: timeout" empty state instead of
+  the generic pre-v0.10 message.
+- Frontend surfaces the actual server error (Railway's 502, our
+  internal errors, etc.) instead of "Something went wrong".
+
+**Long-term plan** — primary use-case for GitVision is *exactly* the
+big repos (golang/go, kubernetes, microsoft/typescript), so the timeout
+guard is a stopgap. Real fix is moving codeAnalysis off the request
+path:
+
+1. **Job queue + polling.** POST /api/sessions returns immediately with
+   a job_id. The full analysis runs in a background worker (separate
+   Railway service or in-process). Frontend polls /api/jobs/:id for
+   completion. No request timeouts because the response is "accepted",
+   not the analysis result.
+2. **Streaming progress.** SSE or chunked response from the analysis
+   endpoint, sending stage updates ("Parsed 1,000 files...") to keep
+   the connection warm and the user informed. Doesn't unlock unlimited
+   time but probably 5× more headroom.
+3. **Subset analysis.** For monorepos, let the user pick a subdirectory
+   (`golang/go/src/cmd` instead of the whole thing). Could be a UI
+   choice or auto-detected from go.work / pnpm-workspace.yaml.
+4. **Higher MAX_FILES + lazy parsing.** Currently we eagerly parse
+   every file we walk. Could delay parsing until Code tab actually
+   queries the file. Solves memory + time at once.
+
+The right path is probably (1) — it cleanly unblocks any-size repos.
+Estimated 1-2 weeks to retrofit. Not blocking anything else right now.
+
 ### Known trade-offs and limits
 
 - **Dep-graph is always HEAD-time.** Imports parsed from latest tarball; no time-travel.
@@ -480,4 +520,4 @@ Sessions stored in `.gitvision/sessions/` — not committed, machine-local.
 
 ---
 
-*Last updated: end of session 5 (v0.18 — Phase 5 complete: type-aware call resolution shipped for all 4 statically-typed languages we support. JS/TS got the most complex rewrite because the plugin handles 8 extensions across 3 grammars; Python's type-hint subset rounds out the set. The Phase 5 contract — containerType + calleeType + pickCallTarget type-match — has held up across Java's class+package, Go's struct+receiver+pointer, TS' class+constructor-shorthand, and Python's PEP-526+__init__-self pattern).*
+*Last updated: end of session 5 (v0.19 — surface containerType in the Code tab UI; graceful timeout for codeAnalysis on huge repos so golang/go-class repos still create sessions; surface server errors honestly in the input form. Big-repo backgrounding is the next architectural challenge — see "Big-repo limits" section).*

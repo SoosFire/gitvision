@@ -251,6 +251,12 @@ export interface AnalysisSnapshot {
   // snapshots simply omit this field. The Imports tab continues to read
   // `fileGraph` as before, so old sessions render unchanged.
   codeGraph?: CodeGraph;
+  /** Set when codeGraph generation was skipped during analysis — typically
+   *  because the analyze pipeline exceeded its time budget on a very large
+   *  repo (golang/go, kubernetes/kubernetes scale). Lets the Code tab show
+   *  a specific message ("skipped: timeout") rather than the generic
+   *  "old snapshot, click Refresh" empty state. v0.19+. */
+  codeGraphSkipReason?: string;
   rateLimitInfo?: {
     limit: number;
     remaining: number;

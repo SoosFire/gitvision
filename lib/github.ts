@@ -442,13 +442,20 @@ export async function analyzeRepo(
   const commitActivity = computeCommitActivity(activitySource);
 
   // Dependency graph + code-analysis CodeGraph — both tarball-based. Run them
-  // off a single shared tarball-extract (instead of having each pipeline
-  // download separately) and run in parallel via Promise.all. Failures in
-  // either fall back gracefully: buildFileGraphFromDir returns an empty
-  // graph with a truncated reason; analyzeDirectory's failures surface as
-  // individual parseError flags rather than blowing up the whole snapshot.
+  // off a single shared tarball-extract and run in parallel via Promise.all.
+  //
+  // Big-repo handling: codeAnalysis is wrapped in CODE_ANALYSIS_TIMEOUT_MS.
+  // For repos like golang/go (5,000+ files past our cap), the AST pipeline
+  // alone can take 35-60s — past Railway's request timeout. When we hit the
+  // budget, we send the snapshot WITHOUT codeGraph and store a skip reason.
+  // The session creates successfully; the Code tab degrades to an explicit
+  // "skipped: too large" message. Long-term we'll move codeAnalysis to a
+  // background worker so big repos can be analyzed properly — see PROGRESS.md
+  // "Big-repo limits".
+  const CODE_ANALYSIS_TIMEOUT_MS = 25_000;
   let fileGraph;
-  let codeGraph;
+  let codeGraph: import("./types").CodeGraph | undefined;
+  let codeGraphSkipReason: string | undefined;
   let cleanup: (() => Promise<void>) | null = null;
   try {
     const extracted = await downloadAndExtract(
@@ -458,18 +465,50 @@ export async function analyzeRepo(
       repoMeta.defaultBranch
     );
     cleanup = extracted.cleanup;
-    const [fg, cg] = await Promise.all([
+
+    // Race codeAnalysis against a timeout. The .catch swallows any post-
+    // timeout rejection (the tarball gets deleted by `cleanup` while a
+    // tree-sitter parser may still be reading from it) so it doesn't bubble
+    // up as an unhandled rejection.
+    const codeAnalysisPromise = analyzeDirectory(extracted.extractDir, [
+      javascriptPlugin,
+      pythonPlugin,
+      goPlugin,
+      javaPlugin,
+      regexFallbackPlugin,
+    ])
+      .then((r) => ({ kind: "ok" as const, codeGraph: r.codeGraph }))
+      .catch((err) => {
+        console.error(
+          `codeAnalysis failed for ${owner}/${repo}:`,
+          err instanceof Error ? err.message : err
+        );
+        return { kind: "err" as const };
+      });
+
+    const TIMEOUT = Symbol("codeAnalysisTimeout");
+    const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) =>
+      setTimeout(() => resolve(TIMEOUT), CODE_ANALYSIS_TIMEOUT_MS)
+    );
+
+    const [fg, cgResult] = await Promise.all([
       buildFileGraphFromDir(extracted.extractDir),
-      analyzeDirectory(extracted.extractDir, [
-        javascriptPlugin,
-        pythonPlugin,
-        goPlugin,
-        javaPlugin,
-        regexFallbackPlugin,
-      ]).then((r) => r.codeGraph),
+      Promise.race([codeAnalysisPromise, timeoutPromise]),
     ]);
+
     fileGraph = fg;
-    codeGraph = cg;
+    if (cgResult === TIMEOUT) {
+      codeGraph = undefined;
+      codeGraphSkipReason = `Code analysis exceeded ${
+        CODE_ANALYSIS_TIMEOUT_MS / 1000
+      }s — repo is too large for the current pipeline. The other tabs still reflect the latest snapshot.`;
+    } else if (cgResult.kind === "err") {
+      codeGraph = undefined;
+      codeGraphSkipReason =
+        "Code analysis failed — see server logs. Other snapshot data is still accurate.";
+    } else {
+      codeGraph = cgResult.codeGraph;
+    }
   } catch (err) {
     // Tarball download itself failed — fall back to the public buildFileGraph
     // which has its own download + cleanup, and skip codeGraph for this run.
@@ -480,7 +519,9 @@ export async function analyzeRepo(
       repoMeta.defaultBranch
     );
     codeGraph = undefined;
-    void err;
+    codeGraphSkipReason = `Tarball extraction failed: ${
+      err instanceof Error ? err.message : "unknown error"
+    }`;
   } finally {
     if (cleanup) await cleanup();
   }
@@ -509,6 +550,7 @@ export async function analyzeRepo(
     commitActivity,
     fileGraph,
     codeGraph,
+    codeGraphSkipReason,
     pullRequests,
     commitIndex,
     historySource,

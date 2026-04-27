@@ -35,7 +35,7 @@ const EXPANDED_LIST_SIZE = 60;
 
 export function CodePanel({ snapshot }: { snapshot: AnalysisSnapshot }) {
   const cg = snapshot.codeGraph;
-  if (!cg) return <EmptyState />;
+  if (!cg) return <EmptyState reason={snapshot.codeGraphSkipReason} />;
   return <CodePanelInner cg={cg} />;
 }
 
@@ -628,7 +628,12 @@ function complexityColor(c: number): string {
 
 // ------------------- Empty state -------------------
 
-function EmptyState() {
+function EmptyState({ reason }: { reason?: string }) {
+  // Two distinct empty-state cases, surfaced explicitly:
+  //   - Pre-v0.10 snapshot (no codeGraph, no skip reason) → "click Refresh"
+  //   - v0.19+ snapshot where analysis was skipped (skip reason present) →
+  //     show the actual reason so the user understands what happened
+  const isSkipped = !!reason;
   return (
     <div
       className="rounded-xl border border-dashed p-10 text-center text-sm flex flex-col items-center gap-3"
@@ -638,15 +643,39 @@ function EmptyState() {
       }}
     >
       <CodeIcon size={20} style={{ color: TOK.textSecondary }} />
-      <p style={{ color: TOK.textSecondary }}>
-        This snapshot was created before the code-analysis pipeline shipped.
-      </p>
-      <p>
-        Click <strong style={{ color: TOK.textPrimary }}>Refresh</strong>{" "}
-        above to populate it. New snapshots include AST-based functions,
-        call-graph and complexity for JS/TS, plus imports for the other 7
-        languages.
-      </p>
+      {isSkipped ? (
+        <>
+          <p style={{ color: TOK.textSecondary }}>
+            Code analysis was skipped for this snapshot.
+          </p>
+          <p
+            className="max-w-2xl"
+            style={{ color: TOK.textMuted }}
+          >
+            {reason}
+          </p>
+          <p
+            className="text-xs"
+            style={{ color: TOK.textMuted }}
+          >
+            The other tabs (Canvas / Imports / Packages / PRs / Overview) still
+            reflect the latest snapshot — only the call-graph / complexity
+            data is missing here.
+          </p>
+        </>
+      ) : (
+        <>
+          <p style={{ color: TOK.textSecondary }}>
+            This snapshot was created before the code-analysis pipeline shipped.
+          </p>
+          <p>
+            Click <strong style={{ color: TOK.textPrimary }}>Refresh</strong>{" "}
+            above to populate it. New snapshots include AST-based functions,
+            call-graph and complexity for JS/TS, plus imports for the other 7
+            languages.
+          </p>
+        </>
+      )}
     </div>
   );
 }

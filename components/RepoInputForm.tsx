@@ -70,9 +70,22 @@ export function RepoInputForm({ demoRepos = [] }: { demoRepos?: string[] }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ repoUrl: value.trim() }),
         });
-        const data = await res.json();
+        // Railway returns its own JSON shape for upstream-timeout errors —
+        // {"status":"error","code":502,"message":"Application failed to respond"}.
+        // Try to parse JSON, but fall back to the raw text if the response
+        // isn't JSON (rare — Railway's 502 page is JSON).
+        let data: { error?: string; message?: string; session?: { id: string } } | null = null;
+        try {
+          data = await res.json();
+        } catch {
+          // Response wasn't JSON. Surface a generic shape.
+        }
         if (!res.ok) {
-          setError(data.error || "Something went wrong");
+          setError(explainServerError(res.status, data));
+          return;
+        }
+        if (!data?.session) {
+          setError("Server returned no session — try again or pick another repo.");
           return;
         }
         setProgress(1);
@@ -82,6 +95,25 @@ export function RepoInputForm({ demoRepos = [] }: { demoRepos?: string[] }) {
         setError(err instanceof Error ? err.message : "Network error");
       }
     });
+  }
+
+  /** Translate raw server / proxy errors into something a human can act on.
+   *  Railway returns 502 + "Application failed to respond" when our backend
+   *  exceeds its request timeout — common for very large repos. */
+  function explainServerError(
+    status: number,
+    data: { error?: string; message?: string } | null
+  ): string {
+    const raw = data?.error || data?.message || "";
+    if (
+      status === 502 ||
+      status === 504 ||
+      /failed to respond|timed out|gateway/i.test(raw)
+    ) {
+      return `Server timed out (HTTP ${status}). This usually means the repo is too large for the current pipeline. Try a smaller repo or a specific subdirectory. Server message: "${raw || "no detail"}"`;
+    }
+    if (raw) return `${raw} (HTTP ${status})`;
+    return `Server error (HTTP ${status})`;
   }
 
   return (
